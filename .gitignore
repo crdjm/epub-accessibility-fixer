@@ -55,6 +55,8 @@ temp/
 epub-temp-*
 *_temp.epub
 *_fixed.epub
+*_epub3.epub
+*.epub
 *_report.html
 *_epubcheck_*.json
 *_ace_*.json
