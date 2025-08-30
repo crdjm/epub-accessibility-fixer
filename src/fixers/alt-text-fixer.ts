@@ -49,7 +49,7 @@ export class AltTextFixer extends BaseFixer {
             if (issue.location?.file) {
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
-                    const fixed = await this.fixAltTextInFile(content);
+                    const fixed = await this.fixAltTextInFile(content, context);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
@@ -60,7 +60,7 @@ export class AltTextFixer extends BaseFixer {
                 const contentFiles = this.getAllContentFiles(context);
 
                 for (const content of contentFiles) {
-                    const fixed = await this.fixAltTextInFile(content);
+                    const fixed = await this.fixAltTextInFile(content, context);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
@@ -88,7 +88,7 @@ export class AltTextFixer extends BaseFixer {
         }
     }
 
-    private async fixAltTextInFile(content: EpubContent): Promise<number> {
+    private async fixAltTextInFile(content: EpubContent, context: ProcessingContext): Promise<number> {
         const $ = this.loadDocument(content);
         let fixedCount = 0;
 
@@ -110,7 +110,7 @@ export class AltTextFixer extends BaseFixer {
                     this.logger.info(`Added empty alt attribute for decorative image: ${src}`);
                 } else {
                     // Generate meaningful alt text with enhanced analysis
-                    const altText = await this.generateMeaningfulAltText($img, $, content, src);
+                    const altText = await this.generateMeaningfulAltText($img, $, content, src, context);
                     $img.attr('alt', altText);
                     fixedCount++;
                     this.logger.info(`Added alt text "${altText}" for image: ${src}`);
@@ -125,19 +125,29 @@ export class AltTextFixer extends BaseFixer {
         return fixedCount;
     }
 
-    private async generateMeaningfulAltText($img: Cheerio, $: CheerioStatic, content: EpubContent, src: string): Promise<string> {
+    private async generateMeaningfulAltText($img: Cheerio, $: CheerioStatic, content: EpubContent, src: string, context: ProcessingContext): Promise<string> {
         const title = $img.attr('title') || '';
         const className = $img.attr('class') || '';
 
-        // First, try to analyze the actual image content
-        const imageAnalysis = await this.analyzeImageContent(content, src);
-        if (imageAnalysis && imageAnalysis.confidence > 0.7) {
+        // First, try to analyze the actual image content with AI/OCR
+        this.logger.info(`Attempting AI analysis for image: ${src}`);
+        const imageAnalysis = await this.analyzeImageContent(content, src, context);
+        if (imageAnalysis && imageAnalysis.confidence > 0.6) {
             // Combine AI analysis with contextual information
             const contextualInfo = this.getContextualInfo($img, $);
             if (contextualInfo) {
-                return `${imageAnalysis.description}. ${contextualInfo}`;
+                return `${imageAnalysis.description} ${contextualInfo}`;
             }
             return imageAnalysis.description;
+        }
+
+        // If AI analysis has low confidence, try to enhance with context
+        if (imageAnalysis && imageAnalysis.confidence > 0.3) {
+            const contextualInfo = this.getContextualInfo($img, $);
+            if (contextualInfo) {
+                return `${imageAnalysis.description} (${contextualInfo})`;
+            }
+            return `${imageAnalysis.description} (auto-generated)`;
         }
 
         // Use title if available
@@ -187,8 +197,8 @@ export class AltTextFixer extends BaseFixer {
             return semanticAlt;
         }
 
-        // Final fallback - include image analysis if available, even with low confidence
-        if (imageAnalysis && imageAnalysis.confidence > 0.3) {
+        // Final fallback - include low-confidence AI analysis if available
+        if (imageAnalysis && imageAnalysis.description && imageAnalysis.description !== 'Image') {
             return `${imageAnalysis.description} (auto-generated)`;
         }
 
@@ -261,10 +271,10 @@ export class AltTextFixer extends BaseFixer {
     /**
      * Analyze image content using various methods (AI, OCR, metadata)
      */
-    private async analyzeImageContent(content: EpubContent, src: string): Promise<ImageAnalysisResult | null> {
+    private async analyzeImageContent(content: EpubContent, src: string, context: ProcessingContext): Promise<ImageAnalysisResult | null> {
         try {
             // Get absolute path to the image file
-            const imagePath = await this.resolveImagePath(content, src);
+            const imagePath = await this.resolveImagePath(content, src, context);
             if (!imagePath || !fs.existsSync(imagePath)) {
                 this.logger.info(`Image file not found: ${imagePath}`);
                 return null;
@@ -294,38 +304,39 @@ export class AltTextFixer extends BaseFixer {
     }
 
     /**
-     * Resolve the absolute path to an image file
+     * Resolve the absolute path to an image file in the extracted EPUB
      */
-    private async resolveImagePath(content: EpubContent, src: string): Promise<string | null> {
+    private async resolveImagePath(content: EpubContent, src: string, context: ProcessingContext): Promise<string | null> {
         try {
-            // Handle relative paths from content file
-            const contentDir = path.dirname(content.path);
-            const absoluteSrc = path.resolve(contentDir, src);
-
-            // Check if file exists
-            if (await fs.pathExists(absoluteSrc)) {
-                return absoluteSrc;
-            }
-
-            // Try relative to EPUB root
-            const epubRoot = process.cwd(); // Assuming we're in the extracted EPUB directory
-            const rootRelativePath = path.join(epubRoot, src);
-            if (await fs.pathExists(rootRelativePath)) {
-                return rootRelativePath;
-            }
-
-            // Try in common image directories
-            const commonDirs = ['images', 'Images', 'img', 'assets', 'media'];
-            const filename = path.basename(src);
-
-            for (const dir of commonDirs) {
-                const candidatePath = path.join(epubRoot, dir, filename);
-                if (await fs.pathExists(candidatePath)) {
-                    return candidatePath;
+            // Get the temp directory from the processing context
+            const tempDir = context.tempDir;
+            
+            // Normalize the src path (remove leading slash if present)
+            const normalizedSrc = src.startsWith('/') ? src.substring(1) : src;
+            
+            // Try different path combinations
+            const alternatives = [
+                path.join(tempDir, normalizedSrc),
+                path.join(tempDir, src),
+                path.join(tempDir, path.basename(src)),
+                path.join(tempDir, 'images', path.basename(src)),
+                path.join(tempDir, 'Images', path.basename(src)),
+                path.join(tempDir, 'OEBPS', normalizedSrc),
+                path.join(tempDir, 'OEBPS/images', path.basename(src)),
+                path.join(path.dirname(content.path), normalizedSrc),
+                path.join(path.dirname(content.path), src)
+            ];
+            
+            for (const altPath of alternatives) {
+                if (await fs.pathExists(altPath)) {
+                    this.logger.info(`Found image at: ${altPath}`);
+                    return altPath;
                 }
             }
-
+            
+            this.logger.warn(`Image not found: ${src} (tried ${alternatives.length} paths)`);
             return null;
+            
         } catch (error) {
             this.logger.error(`Failed to resolve image path for ${src}: ${error}`);
             return null;
@@ -333,51 +344,39 @@ export class AltTextFixer extends BaseFixer {
     }
 
     /**
-     * Try local AI analysis using models like BLIP, CLIP, or similar
+     * Try local AI analysis using Ollama with vision models
      */
     private async tryLocalAIAnalysis(imagePath: string): Promise<ImageAnalysisResult | null> {
         try {
-            // Check if Python and required libraries are available
-            const hasPython = await this.checkPythonDependencies();
-            if (!hasPython) {
-                this.logger.info('Python AI dependencies not available for local image analysis');
+            // Check if Ollama is available
+            const hasOllama = await this.checkOllamaAvailability();
+            if (!hasOllama) {
+                this.logger.info('Ollama not available for local image analysis');
                 return null;
             }
 
-            // Create a Python script for image analysis
-            const pythonScript = this.generateImageAnalysisScript();
-            const scriptPath = path.join(process.cwd(), 'temp_image_analysis.py');
+            // Check if we have a vision-capable model
+            const visionModel = await this.findVisionModel();
+            if (!visionModel) {
+                this.logger.info('No vision-capable model found in Ollama');
+                return null;
+            }
 
-            await fs.writeFile(scriptPath, pythonScript);
-
-            try {
-                const pythonCmd = this.getPythonCommand();
-
-                // Run the Python script
-                const result = execSync(`${pythonCmd} ${scriptPath} "${imagePath}"`, {
-                    encoding: 'utf8',
-                    timeout: 30000 // 30 second timeout
-                });
-
-                const analysis = JSON.parse(result.trim());
-
-                await fs.remove(scriptPath); // Clean up
-
+            // Use Ollama to analyze the image
+            const analysis = await this.analyzeImageWithOllama(imagePath, visionModel);
+            if (analysis) {
                 return {
                     description: analysis.description,
                     confidence: analysis.confidence,
                     source: 'ai',
                     details: analysis.details
                 };
-
-            } catch (execError) {
-                await fs.remove(scriptPath); // Clean up on error
-                this.logger.info(`Python image analysis failed: ${execError}`);
-                return null;
             }
 
+            return null;
+
         } catch (error) {
-            this.logger.info(`Local AI analysis setup failed: ${error}`);
+            this.logger.info(`Ollama image analysis failed: ${error}`);
             return null;
         }
     }
@@ -645,5 +644,175 @@ except Exception as e:
         ];
 
         return decorativePatterns.some(pattern => pattern.test(src));
+    }
+
+    /**
+     * Check if Ollama is available and find vision-capable models
+     */
+    async checkOllamaAvailability(): Promise<boolean> {
+        try {
+            // Check if Ollama is running
+            const response = await axios.get('http://localhost:11434/api/tags', {
+                timeout: 5000
+            });
+            
+            return response.data && response.data.models && response.data.models.length > 0;
+        } catch (error) {
+            this.logger.info(`Ollama not available: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * Find a vision-capable model in Ollama
+     */
+    async findVisionModel(): Promise<string | null> {
+        try {
+            const response = await axios.get('http://localhost:11434/api/tags', {
+                timeout: 5000
+            });
+            
+            if (response.data && response.data.models) {
+                // Look for known vision models (in order of preference)
+                const visionModels = [
+                    'llava:13b', 'llava:7b', 'llava:latest',
+                    'bakllava:latest', 'bakllava:7b',
+                    'moondream:latest', 'moondream:1.8b'
+                ];
+                
+                for (const modelName of visionModels) {
+                    const found = response.data.models.find((model: any) => 
+                        model.name === modelName || model.name.startsWith(modelName.split(':')[0])
+                    );
+                    if (found) {
+                        this.logger.info(`Found vision model: ${found.name}`);
+                        return found.name;
+                    }
+                }
+                
+                this.logger.info(`No vision-capable models found. Available models: ${response.data.models.map((m: any) => m.name).join(', ')}`);
+            }
+            
+            return null;
+        } catch (error) {
+            this.logger.error(`Error finding vision model: ${error}`);
+            return null;
+        }
+    }
+
+    /**
+     * Analyze image using Ollama with vision capabilities
+     */
+    private async analyzeImageWithOllama(imagePath: string, modelName: string): Promise<{
+        description: string;
+        confidence: number;
+        details?: any;
+    } | null> {
+        try {
+            // Verify image file exists and get info
+            const stats = await fs.stat(imagePath);
+            this.logger.info(`Reading image file: ${imagePath} (${stats.size} bytes)`);
+            
+            // Convert image to base64
+            const imageBuffer = await fs.readFile(imagePath);
+            const base64Image = imageBuffer.toString('base64');
+            
+            // Log first few characters of base64 to verify it's different for each image
+            const base64Preview = base64Image.substring(0, 50);
+            this.logger.info(`Base64 preview for ${path.basename(imagePath)}: ${base64Preview}...`);
+            
+            // Get image format from file extension
+            const ext = path.extname(imagePath).toLowerCase();
+            const mimeType = this.getMimeType(ext);
+            this.logger.info(`Image format: ${ext} -> ${mimeType}`);
+            
+            // Create a more specific prompt that asks for unique details
+            const prompt = `Look carefully at this image and describe exactly what you see. Be specific about objects, people, colors, actions, and setting. What makes this image unique? Provide a clear, descriptive sentence for alt text.`;
+
+            this.logger.info(`Sending image analysis request to ${modelName}...`);
+            
+            // Make request to Ollama
+            const response = await axios.post('http://localhost:11434/api/generate', {
+                model: modelName,
+                prompt: prompt,
+                images: [base64Image],
+                stream: false,
+                options: {
+                    temperature: 0.1, // Very low temperature for consistent, specific responses
+                    top_p: 0.9,
+                    num_predict: 150, // Allow more tokens for detailed descriptions
+                    seed: Math.floor(Math.random() * 1000000) // Random seed to avoid cached responses
+                }
+            }, {
+                timeout: 60000, // 60 second timeout for vision analysis
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.data && response.data.response) {
+                const analysisText = response.data.response.trim();
+                this.logger.info(`Raw Ollama response for ${path.basename(imagePath)}: "${analysisText}"`);
+                
+                // Clean up the response
+                let description = analysisText
+                    .replace(/^["']|["']$/g, '') // Remove quotes
+                    .replace(/\n+/g, ' ') // Replace newlines with spaces
+                    .replace(/\s+/g, ' ') // Normalize whitespace
+                    .trim();
+                
+                // Ensure the description is reasonable length and quality
+                if (description.length > 10 && description.length < 300) {
+                    // Capitalize first letter if needed
+                    if (description.length > 0) {
+                        description = description.charAt(0).toUpperCase() + description.slice(1);
+                    }
+                    
+                    // Remove any trailing periods and add one
+                    description = description.replace(/\.+$/, '') + '.';
+                    
+                    this.logger.info(`Final processed description for ${path.basename(imagePath)}: "${description}"`);
+                    
+                    return {
+                        description: description,
+                        confidence: 0.85, // High confidence for AI analysis
+                        details: {
+                            model: modelName,
+                            source: 'ollama',
+                            imageSize: stats.size,
+                            imageFormat: ext,
+                            base64Length: base64Image.length
+                        }
+                    };
+                }
+                
+                this.logger.warn(`Ollama response too short or long for ${path.basename(imagePath)}: "${analysisText}"`);
+            } else {
+                this.logger.warn(`No response data from Ollama for ${path.basename(imagePath)}`);
+            }
+            
+            return null;
+            
+        } catch (error) {
+            this.logger.error(`Ollama image analysis failed for ${path.basename(imagePath)}: ${error}`);
+            return null;
+        }
+    }
+
+    /**
+     * Get MIME type from file extension
+     */
+    private getMimeType(ext: string): string {
+        const mimeTypes: { [key: string]: string } = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.bmp': 'image/bmp',
+            '.svg': 'image/svg+xml'
+        };
+        
+        return mimeTypes[ext] || 'image/jpeg';
     }
 }
