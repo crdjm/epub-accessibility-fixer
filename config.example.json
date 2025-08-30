@@ -1,0 +1,25 @@
+{
+    "enabledFixers": [
+        "missing-alt-text",
+        "heading-structure",
+        "language-attributes",
+        "table-headers",
+        "missing-metadata",
+        "broken-links",
+        "invalid-xhtml"
+    ],
+    "accessibility": {
+        "addMissingAltText": true,
+        "fixHeadingStructure": true,
+        "addLandmarks": true,
+        "improveColorContrast": false,
+        "addLanguageAttributes": true,
+        "fixTableHeaders": true,
+        "addSkipLinks": true
+    },
+    "validation": {
+        "fixMissingMetadata": true,
+        "fixBrokenLinks": true,
+        "fixInvalidXhtml": true
+    }
+}
