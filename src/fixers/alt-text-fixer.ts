@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, AIImageAnalysis } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 import * as fs from 'fs-extra';
@@ -18,6 +18,11 @@ interface ImageAnalysisResult {
         text?: string;
         colors?: string[];
         setting?: string;
+        model?: string;
+        source?: string;
+        imageSize?: number;
+        imageFormat?: string;
+        [key: string]: any;
     };
 }
 
@@ -94,10 +99,14 @@ export class AltTextFixer extends BaseFixer {
 
         // Process images sequentially to avoid async issues
         const images = $('img').toArray();
+        this.logger.info(`Found ${images.length} images in ${content.path}`);
 
         for (const imgElement of images) {
             const $img = $(imgElement);
             const existingAlt = $img.attr('alt');
+            const src = $img.attr('src') || '';
+            
+            this.logger.info(`Processing image: ${src}, existing alt: "${existingAlt || 'none'}"`);
 
             // Only fix if alt attribute is missing or empty
             if (!existingAlt || existingAlt.trim() === '') {
@@ -121,6 +130,10 @@ export class AltTextFixer extends BaseFixer {
         if (fixedCount > 0) {
             this.saveDocument($, content);
         }
+        
+        // Log summary of AI analyses stored
+        const aiCount = context.aiImageAnalyses ? context.aiImageAnalyses.length : 0;
+        this.logger.info(`Processed ${images.length} images, fixed ${fixedCount}, stored ${aiCount} AI analyses for review`);
 
         return fixedCount;
     }
@@ -129,9 +142,31 @@ export class AltTextFixer extends BaseFixer {
         const title = $img.attr('title') || '';
         const className = $img.attr('class') || '';
 
+        // Initialize AI analyses array if not exists
+        if (!context.aiImageAnalyses) {
+            context.aiImageAnalyses = [];
+        }
+
         // First, try to analyze the actual image content with AI/OCR
         this.logger.info(`Attempting AI analysis for image: ${src}`);
         const imageAnalysis = await this.analyzeImageContent(content, src, context);
+        
+        // Debug logging for analysis results
+        if (imageAnalysis) {
+            this.logger.info(`AI analysis result for ${src}: confidence=${imageAnalysis.confidence}, description="${imageAnalysis.description}"`);
+        } else {
+            this.logger.info(`No AI analysis result for ${src}`);
+        }
+        
+        // Always store AI analysis results for review, regardless of confidence or content
+        if (imageAnalysis && imageAnalysis.description) {
+            const finalDescription = imageAnalysis.confidence <= 0.6 ? 
+                `${imageAnalysis.description} (auto-generated)` : 
+                imageAnalysis.description;
+            await this.storeAIAnalysisResult(src, finalDescription, imageAnalysis, context, content.path);
+            this.logger.info(`Stored AI analysis for review: ${src} -> "${finalDescription}"`);
+        }
+        
         if (imageAnalysis && imageAnalysis.confidence > 0.6) {
             // Combine AI analysis with contextual information
             const contextualInfo = this.getContextualInfo($img, $);
@@ -197,7 +232,7 @@ export class AltTextFixer extends BaseFixer {
             return semanticAlt;
         }
 
-        // Final fallback - include low-confidence AI analysis if available
+        // Final fallback - use stored AI analysis if available, otherwise provide default
         if (imageAnalysis && imageAnalysis.description && imageAnalysis.description !== 'Image') {
             return `${imageAnalysis.description} (auto-generated)`;
         }
@@ -361,6 +396,8 @@ export class AltTextFixer extends BaseFixer {
                 this.logger.info('No vision-capable model found in Ollama');
                 return null;
             }
+            
+            this.logger.info(`Using vision model: ${visionModel}`);
 
             // Use Ollama to analyze the image
             const analysis = await this.analyzeImageWithOllama(imagePath, visionModel);
@@ -376,7 +413,7 @@ export class AltTextFixer extends BaseFixer {
             return null;
 
         } catch (error) {
-            this.logger.info(`Ollama image analysis failed: ${error}`);
+            this.logger.error(`Ollama image analysis failed: ${error}`);
             return null;
         }
     }
@@ -651,20 +688,33 @@ except Exception as e:
      */
     async checkOllamaAvailability(): Promise<boolean> {
         try {
+            this.logger.info('Checking Ollama availability...');
             // Check if Ollama is running
             const response = await axios.get('http://localhost:11434/api/tags', {
                 timeout: 5000
             });
             
-            return response.data && response.data.models && response.data.models.length > 0;
-        } catch (error) {
-            this.logger.info(`Ollama not available: ${error}`);
+            if (response.data && response.data.models && response.data.models.length > 0) {
+                this.logger.info(`Ollama is available with ${response.data.models.length} models`);
+                return true;
+            } else {
+                this.logger.warn('Ollama is running but no models found');
+                return false;
+            }
+        } catch (error: any) {
+            if (error.code === 'ECONNREFUSED') {
+                this.logger.info('Ollama is not running (connection refused)');
+            } else if (error.code === 'ETIMEDOUT') {
+                this.logger.warn('Ollama connection timed out');
+            } else {
+                this.logger.warn(`Ollama check failed: ${error.message}`);
+            }
             return false;
         }
     }
 
     /**
-     * Find a vision-capable model in Ollama
+     * Find a vision-capable model in Ollama by checking actual capabilities
      */
     async findVisionModel(): Promise<string | null> {
         try {
@@ -673,19 +723,47 @@ except Exception as e:
             });
             
             if (response.data && response.data.models) {
-                // Look for known vision models (in order of preference)
-                const visionModels = [
-                    'llava:13b', 'llava:7b', 'llava:latest',
-                    'bakllava:latest', 'bakllava:7b',
-                    'moondream:latest', 'moondream:1.8b'
+                this.logger.info(`Checking ${response.data.models.length} models for vision capabilities...`);
+                
+                // Check each model for vision capabilities
+                for (const model of response.data.models) {
+                    try {
+                        // Use the show API to check model capabilities
+                        const showResponse = await axios.post('http://localhost:11434/api/show', {
+                            name: model.name
+                        }, {
+                            timeout: 10000
+                        });
+                        
+                        if (showResponse.data && showResponse.data.capabilities) {
+                            const capabilities = showResponse.data.capabilities;
+                            this.logger.info(`Model ${model.name} capabilities: ${capabilities.join(', ')}`);
+                            
+                            if (capabilities.includes('vision')) {
+                                this.logger.info(`Found vision-capable model: ${model.name}`);
+                                return model.name;
+                            }
+                        }
+                    } catch (error) {
+                        this.logger.warn(`Failed to check capabilities for ${model.name}: ${error}`);
+                        // Continue checking other models
+                    }
+                }
+                
+                // If no vision models found via API, fall back to known model patterns
+                this.logger.info('No vision capabilities detected via API, checking known vision model patterns...');
+                const knownVisionModels = [
+                    'moondream:latest', 'moondream:1.8b', 'moondream:7b',
+                    'llava:latest', 'llava:13b', 'llava:7b', 
+                    'bakllava:latest', 'bakllava:7b'
                 ];
                 
-                for (const modelName of visionModels) {
+                for (const modelName of knownVisionModels) {
                     const found = response.data.models.find((model: any) => 
                         model.name === modelName || model.name.startsWith(modelName.split(':')[0])
                     );
                     if (found) {
-                        this.logger.info(`Found vision model: ${found.name}`);
+                        this.logger.info(`Found known vision model: ${found.name}`);
                         return found.name;
                     }
                 }
@@ -726,43 +804,155 @@ except Exception as e:
             const mimeType = this.getMimeType(ext);
             this.logger.info(`Image format: ${ext} -> ${mimeType}`);
             
-            // Create a more specific prompt that asks for unique details
-            const prompt = `Look carefully at this image and describe exactly what you see. Be specific about objects, people, colors, actions, and setting. What makes this image unique? Provide a clear, descriptive sentence for alt text.`;
+            // Create a prompt optimized for vision models
+            const prompt = `Create alt text for this EPUB image that will help screen reader users understand the visual content.
 
-            this.logger.info(`Sending image analysis request to ${modelName}...`);
+Focus on:
+- Character names and their actions/expressions  
+- Important visual elements for the story
+- Setting details that matter to understanding
+
+Avoid starting with "image of" or "picture of". Be descriptive but concise.
+
+Final alt text:`;
+
+            this.logger.info(`Sending image analysis request to vision model: ${modelName}...`);
             
-            // Make request to Ollama
-            const response = await axios.post('http://localhost:11434/api/generate', {
-                model: modelName,
-                prompt: prompt,
-                images: [base64Image],
-                stream: false,
-                options: {
-                    temperature: 0.1, // Very low temperature for consistent, specific responses
-                    top_p: 0.9,
-                    num_predict: 150, // Allow more tokens for detailed descriptions
-                    seed: Math.floor(Math.random() * 1000000) // Random seed to avoid cached responses
+            // Make request to Ollama with optimized parameters and retry logic
+            let retries = 2;
+            let lastError: any;
+            let response: any;
+            
+            while (retries >= 0) {
+                try {
+                    response = await axios.post('http://localhost:11434/api/generate', {
+                        model: modelName,
+                        prompt: prompt,
+                        images: [base64Image],
+                        stream: false,
+                        options: {
+                            temperature: 0.3, // Allow some creativity for better descriptions
+                            top_p: 0.9,
+                            top_k: 50,
+                            num_predict: 150, // Standard limit for vision models
+                            repeat_penalty: 1.1,
+                            seed: Math.floor(Math.random() * 1000000) // Random seed to avoid cached responses
+                        }
+                    }, {
+                        timeout: 60000, // 1 minute timeout for vision models
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    // Success - break out of retry loop
+                    break;
+                    
+                } catch (error: any) {
+                    lastError = error;
+                    retries--;
+                    
+                    if (error.code === 'ECONNREFUSED') {
+                        this.logger.warn(`Ollama connection refused for ${path.basename(imagePath)} (${retries} retries left)`);
+                    } else if (error.code === 'ETIMEDOUT') {
+                        this.logger.warn(`Ollama request timed out for ${path.basename(imagePath)} (${retries} retries left)`);
+                    } else {
+                        this.logger.warn(`Ollama request failed for ${path.basename(imagePath)}: ${error.message} (${retries} retries left)`);
+                    }
+                    
+                    if (retries >= 0) {
+                        // Wait before retry
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
                 }
-            }, {
-                timeout: 60000, // 60 second timeout for vision analysis
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
+            }
+            
+            // If we exhausted retries, throw the last error
+            if (retries < 0) {
+                throw lastError;
+            }
 
             if (response.data && response.data.response) {
                 const analysisText = response.data.response.trim();
+                
+                // Check if response is empty
+                if (!analysisText) {
+                    this.logger.warn(`Ollama returned empty response for ${path.basename(imagePath)}`);
+                    return null;
+                }
+                
                 this.logger.info(`Raw Ollama response for ${path.basename(imagePath)}: "${analysisText}"`);
                 
                 // Clean up the response
-                let description = analysisText
+                let description = analysisText;
+                
+                // Look for alt text after common prefixes
+                const altTextPrefixes = [
+                    'Final alt text:',
+                    'final alt text:',
+                    'Alt text:',
+                    'alt text:',
+                    'Description:',
+                    'Image description:'
+                ];
+                
+                for (const prefix of altTextPrefixes) {
+                    if (description.includes(prefix)) {
+                        const afterPrefix = description.split(prefix).pop();
+                        if (afterPrefix && afterPrefix.trim()) {
+                            description = afterPrefix.trim();
+                            this.logger.info(`Extracted alt text using prefix "${prefix}": "${description}"`);
+                            break;
+                        }
+                    }
+                }
+                
+                // Clean up the response
+                description = description
                     .replace(/^["']|["']$/g, '') // Remove quotes
                     .replace(/\n+/g, ' ') // Replace newlines with spaces
                     .replace(/\s+/g, ' ') // Normalize whitespace
                     .trim();
                 
+                // Filter out generic or unhelpful descriptions
+                const genericPhrases = [
+                    'this is an image',
+                    'the image shows',
+                    'this image contains',
+                    'the picture depicts',
+                    'this illustration',
+                    'a colorful illustration',
+                    'an image of'
+                ];
+                
+                // Remove generic prefixes
+                for (const phrase of genericPhrases) {
+                    if (description.toLowerCase().startsWith(phrase)) {
+                        description = description.substring(phrase.length).trim();
+                        break;
+                    }
+                }
+                
+                // Check for responses indicating the model didn't receive the image
+                const noImageIndicators = [
+                    'please provide the image',
+                    'describe it for me',
+                    'i cannot see',
+                    'no image provided',
+                    'unable to see'
+                ];
+                
+                const hasNoImageIndicator = noImageIndicators.some(indicator => 
+                    description.toLowerCase().includes(indicator)
+                );
+                
+                if (hasNoImageIndicator) {
+                    this.logger.warn(`Model indicates it cannot see the image for ${path.basename(imagePath)}: "${description}"`);
+                    return null;
+                }
+                
                 // Ensure the description is reasonable length and quality
-                if (description.length > 10 && description.length < 300) {
+                if (description.length > 5 && description.length < 400) {
                     // Capitalize first letter if needed
                     if (description.length > 0) {
                         description = description.charAt(0).toUpperCase() + description.slice(1);
@@ -788,7 +978,12 @@ except Exception as e:
                 
                 this.logger.warn(`Ollama response too short or long for ${path.basename(imagePath)}: "${analysisText}"`);
             } else {
-                this.logger.warn(`No response data from Ollama for ${path.basename(imagePath)}`);
+                this.logger.error(`No response data from Ollama for ${path.basename(imagePath)}. Response: ${JSON.stringify(response.data)}`);
+                
+                // Check if it's a connection issue
+                if (!response.data) {
+                    this.logger.error('Ollama response is completely empty - possible connection issue');
+                }
             }
             
             return null;
@@ -814,5 +1009,60 @@ except Exception as e:
         };
         
         return mimeTypes[ext] || 'image/jpeg';
+    }
+
+    /**
+     * Store AI analysis result for review page generation
+     */
+    private async storeAIAnalysisResult(
+        originalSrc: string, 
+        generatedAltText: string, 
+        analysis: ImageAnalysisResult, 
+        context: ProcessingContext,
+        htmlFilePath: string
+    ): Promise<void> {
+        try {
+            // Get the actual image path
+            const imagePath = await this.resolveImagePath(
+                { path: '', content: '', mediaType: '', modified: false }, 
+                originalSrc, 
+                context
+            );
+            
+            if (!imagePath || !fs.existsSync(imagePath)) {
+                this.logger.warn(`Cannot store AI analysis - image not found: ${originalSrc}`);
+                return;
+            }
+
+            // Read image and convert to base64 for embedding in review page
+            const imageBuffer = await fs.readFile(imagePath);
+            const imageExtension = path.extname(imagePath).toLowerCase();
+            const mimeType = this.getMimeType(imageExtension);
+            const imageData = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+
+            const aiAnalysis: AIImageAnalysis = {
+                imagePath,
+                originalSrc,
+                htmlFilePath,
+                generatedAltText,
+                analysisMethod: analysis.source as 'ai' | 'ocr' | 'metadata',
+                confidence: analysis.confidence,
+                model: analysis.details?.model || analysis.details?.source,
+                timestamp: new Date().toISOString(),
+                imageData,
+                details: analysis.details
+            };
+
+            // Initialize the array if it doesn't exist
+            if (!context.aiImageAnalyses) {
+                context.aiImageAnalyses = [];
+            }
+
+            context.aiImageAnalyses.push(aiAnalysis);
+            this.logger.info(`Stored AI analysis for review: ${originalSrc} -> "${generatedAltText}"`);
+
+        } catch (error) {
+            this.logger.error(`Failed to store AI analysis result for ${originalSrc}: ${error}`);
+        }
     }
 }

@@ -133,6 +133,24 @@ export interface EpubContent {
     modified: boolean;
 }
 
+export interface AIImageAnalysis {
+    imagePath: string;
+    originalSrc: string;
+    htmlFilePath: string; // Path to the HTML file containing the <img> tag
+    generatedAltText: string;
+    analysisMethod: 'ai' | 'ocr' | 'metadata';
+    confidence: number;
+    model?: string;
+    timestamp: string;
+    imageData?: string; // Base64 encoded image for review page
+    details?: {
+        source?: string;
+        imageSize?: number;
+        imageFormat?: string;
+        [key: string]: any;
+    };
+}
+
 export interface ProcessingContext {
     epubPath: string;
     tempDir: string;
@@ -143,4 +161,5 @@ export interface ProcessingContext {
     fixes: FixResult[];
     config: FixerConfig;
     options?: CliOptions;
+    aiImageAnalyses?: AIImageAnalysis[];
 }

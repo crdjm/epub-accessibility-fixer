@@ -3,6 +3,7 @@ import * as path from 'path';
 import { AnalysisResult, ValidationIssue, AccessibilityIssue, ProcessingContext, FixResult } from '../types';
 import { Logger } from '../utils/common';
 import { CategorizedIssues } from '../core/issue-categorizer';
+import { ImageReviewGenerator } from './image-review-generator';
 
 export interface ReportData {
     epub: {
@@ -34,9 +35,11 @@ export interface ReportData {
 
 export class HtmlReportGenerator {
     private logger: Logger;
+    private imageReviewGenerator: ImageReviewGenerator;
 
     constructor(logger: Logger) {
         this.logger = logger;
+        this.imageReviewGenerator = new ImageReviewGenerator(logger);
     }
 
     async generateReport(
@@ -49,10 +52,25 @@ export class HtmlReportGenerator {
         this.logger.info(`Generating HTML report: ${outputPath}`);
 
         const reportData = this.prepareReportData(context, categorizedIssues, fixes, analysisStartTime);
-        const htmlContent = await this.generateHtmlContent(reportData);
+        
+        // Generate image review page if there are AI analyses
+        let imageReviewPath: string | null = null;
+        if (context.aiImageAnalyses && context.aiImageAnalyses.length > 0) {
+            const reportDir = path.dirname(outputPath);
+            const reportBasename = path.basename(outputPath, path.extname(outputPath));
+            imageReviewPath = path.join(reportDir, `${reportBasename}_image_review.html`);
+            
+            await this.imageReviewGenerator.generateImageReviewPage(context, imageReviewPath);
+        }
+        
+        const htmlContent = await this.generateHtmlContent(reportData, imageReviewPath);
 
         await fs.writeFile(outputPath, htmlContent, 'utf8');
         this.logger.success(`HTML report generated: ${outputPath}`);
+        
+        if (imageReviewPath) {
+            this.logger.success(`Image review page generated: ${imageReviewPath}`);
+        }
     }
 
     private prepareReportData(
@@ -203,7 +221,7 @@ export class HtmlReportGenerator {
         return recommendations;
     }
 
-    private async generateHtmlContent(data: ReportData): Promise<string> {
+    private async generateHtmlContent(data: ReportData, imageReviewPath?: string | null): Promise<string> {
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -245,6 +263,19 @@ export class HtmlReportGenerator {
                     <div class="summary-number">${data.summary.fixedIssues}</div>
                 </div>
             </div>
+            
+            ${imageReviewPath ? `
+            <div class="image-review-section">
+                <h3>🖼️ AI-Generated Alt Text Review</h3>
+                <div class="review-notice">
+                    <p>This analysis included AI-generated alternative text for images. Please review these for accuracy and appropriateness.</p>
+                    <a href="${path.basename(imageReviewPath)}" class="review-link" target="_blank">
+                        📝 Review AI-Generated Alt Text
+                        <span class="review-count">(${data.epub.metadata.accessibility?.accessibilityFeature?.includes('alternativeText') ? 'Multiple images' : 'View details'})</span>
+                    </a>
+                </div>
+            </div>
+            ` : ''}
             
             <div class="scores">
                 <div class="score-item">
@@ -403,6 +434,57 @@ export class HtmlReportGenerator {
         .score.good { background: #d1ecf1; color: #0c5460; }
         .score.fair { background: #fff3cd; color: #856404; }
         .score.poor { background: #f8d7da; color: #721c24; }
+        
+        .image-review-section { 
+            background: #f0f9ff; 
+            border: 1px solid #bae6fd; 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin: 20px 0; 
+        }
+        
+        .image-review-section h3 { 
+            margin: 0 0 15px 0; 
+            color: #0c4a6e; 
+        }
+        
+        .review-notice { 
+            display: flex; 
+            flex-direction: column; 
+            gap: 15px; 
+        }
+        
+        .review-notice p { 
+            margin: 0; 
+            color: #0f172a; 
+        }
+        
+        .review-link { 
+            display: inline-flex; 
+            align-items: center; 
+            gap: 8px; 
+            background: #2563eb; 
+            color: white; 
+            text-decoration: none; 
+            padding: 12px 20px; 
+            border-radius: 6px; 
+            font-weight: 500; 
+            transition: all 0.2s ease; 
+            align-self: flex-start;
+        }
+        
+        .review-link:hover { 
+            background: #1d4ed8; 
+            transform: translateY(-1px); 
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); 
+        }
+        
+        .review-count { 
+            background: rgba(255,255,255,0.2); 
+            padding: 2px 8px; 
+            border-radius: 12px; 
+            font-size: 0.85em; 
+        }
         
         .recommendations { padding: 30px; border-bottom: 1px solid #eee; }
         .recommendations h2 { margin-top: 0; color: #333; }

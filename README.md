@@ -6,6 +6,8 @@ A comprehensive CLI tool for analyzing and automatically fixing EPUB validation 
 
 - **Comprehensive Analysis**: Uses EpubCheck for validation and DAISY ACE for accessibility analysis
 - **Automatic Fixes**: Intelligently fixes issues like missing alt text, heading structure problems, language attributes, and more
+- **AI-Powered Alt Text**: Generates meaningful alt text using local AI vision models, OCR, and metadata analysis
+- **AI Review Interface**: Dedicated review page for all AI-generated alt text with visual verification
 - **Detailed Reporting**: Generates beautiful HTML reports with actionable insights
 - **Priority-based Processing**: Categorizes and prioritizes issues for optimal fixing order
 - **Configurable**: Customizable fix behavior and reporting options
@@ -151,6 +153,33 @@ Create a configuration file to customize the fixing behavior:
   }
 }
 ```
+
+## Programmatic API
+
+## AI Image Review Feature
+
+When the tool uses AI to generate alt text for images, it automatically creates an **AI Image Review page** alongside the main report. This feature provides:
+
+### Visual Review Interface
+- **Side-by-side display**: View images alongside their AI-generated alt text
+- **Quality indicators**: Confidence scores and analysis method badges
+- **Review controls**: Approve, revise, or reject generated alt text
+- **Batch processing**: Review all AI-generated alt text in one place
+
+### Analysis Tracking
+- **Method transparency**: Shows whether alt text came from AI vision, OCR, or metadata
+- **Model information**: Displays which AI model was used (e.g., LLaVA, Moondream)
+- **Confidence scoring**: Visual indicators of analysis reliability
+- **Audit trail**: Complete record of AI-generated accessibility content
+
+### Review Workflow
+1. **Automatic Generation**: AI image review page created when AI alt text is generated
+2. **Main Report Link**: Prominent link from main HTML report to review page
+3. **Interactive Review**: Click Approve/Revise/Reject for each image
+4. **Revision Tools**: Built-in editor for improving alt text
+5. **Persistent Storage**: Review decisions saved in browser for reference
+
+See [AI-IMAGE-REVIEW.md](./AI-IMAGE-REVIEW.md) for detailed documentation.
 
 ## Programmatic API
 
