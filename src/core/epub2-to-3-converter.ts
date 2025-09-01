@@ -233,12 +233,85 @@ export class Epub2To3Converter {
             changes.push('Added Dublin Core namespace');
         }
 
+        // Remove xsi:type attributes from dc:language elements
+        $('dc\\:language[xsi\\:type]').each((_, element) => {
+            const $element = $(element);
+            $element.removeAttr('xsi:type');
+        });
+        changes.push('Removed xsi:type attributes from dc:language elements');
+
+        // Remove all dc:date elements for EPUB 3.0 compliance
+        const dateElements = $('dc\\:date');
+        if (dateElements.length > 0) {
+            dateElements.remove();
+            changes.push('Removed dc:date elements for EPUB 3.0 compliance');
+        }
+
+        // Fix dcterms:modified format
+        $('meta[property="dcterms:modified"]').each((_, element) => {
+            const $element = $(element);
+            const text = $element.text().trim();
+            
+            // Convert to proper ISO 8601 format if needed
+            if (text) {
+                // Try to parse and reformat
+                try {
+                    const date = new Date(text);
+                    if (!isNaN(date.getTime())) {
+                        const isoString = date.toISOString().replace(/\.\d+Z$/, 'Z');
+                        $element.text(isoString);
+                        changes.push(`Fixed dcterms:modified format: ${text} → ${isoString}`);
+                    }
+                } catch (e) {
+                    // If we can't parse it, remove the element and create a new one
+                    $element.remove();
+                }
+            }
+        });
+
         // Add basic EPUB 3.0 metadata if missing
         if (!$('meta[property="dcterms:modified"]').length) {
-            const modifiedDate = new Date().toISOString();
-            metadata.append(`\n    <meta property="dcterms:modified">${modifiedDate}</meta>`);
+            const modifiedDate = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+            // Use proper DOM manipulation instead of string concatenation
+            const metaElement = $('<meta>').attr('property', 'dcterms:modified').text(modifiedDate);
+            metadata.append('\n    ').append(metaElement);
             changes.push('Added dcterms:modified metadata');
         }
+
+        // Manually reorder metadata elements to ensure proper EPUB 3.0 structure
+        // Required order: dc:title, dc:language, dc:identifier, then other elements
+        const xmlContent = metadata.html();
+        
+        // Extract all metadata elements
+        const elements: Array<{tag: string, content: string, attributes: string}> = [];
+        const elementRegex = /<([^>\s]+)([^>]*)>([^<]*(?:<[^>]*>[^<]*)*)<\/\1>/g;
+        let match;
+        
+        while ((match = elementRegex.exec(xmlContent)) !== null) {
+            elements.push({
+                tag: match[1],
+                attributes: match[2],
+                content: match[3]
+            });
+        }
+        
+        // Sort elements: title, language, identifier first, then others
+        const sortedElements = [
+            ...elements.filter(e => e.tag === 'dc:title'),
+            ...elements.filter(e => e.tag === 'dc:language'),
+            ...elements.filter(e => e.tag === 'dc:identifier'),
+            ...elements.filter(e => e.tag !== 'dc:title' && e.tag !== 'dc:language' && e.tag !== 'dc:identifier')
+        ];
+        
+        // Rebuild metadata content
+        let newContent = '';
+        sortedElements.forEach(element => {
+            newContent += `<${element.tag}${element.attributes}>${element.content}</${element.tag}>\n    `;
+        });
+        
+        // Update metadata content
+        metadata.html('\n    ' + newContent.trim());
+        changes.push('Reordered metadata elements for EPUB 3.0 compliance');
     }
 
     /**
@@ -261,9 +334,13 @@ export class Epub2To3Converter {
         const navPath = this.getNavigationPath(opfPath);
         const navId = 'nav';
 
-        // Add to manifest
-        const navItem = `\n    <item id="${navId}" href="${path.basename(navPath)}" media-type="application/xhtml+xml" properties="nav"/>`;
-        manifest.append(navItem);
+        // Add to manifest using proper DOM manipulation
+        const navItem = $('<item>')
+            .attr('id', navId)
+            .attr('href', path.basename(navPath))
+            .attr('media-type', 'application/xhtml+xml')
+            .attr('properties', 'nav');
+        manifest.append('\n    ').append(navItem);
 
         // Create enhanced navigation content with proper spine references
         const title = $('dc\\:title, title').first().text() || 'Untitled';
@@ -288,10 +365,15 @@ export class Epub2To3Converter {
             changes.push('Removed NCX toc reference from spine');
         }
 
-        // Check for NCX file in manifest and mark as deprecated
+        // Check for NCX file in manifest and remove it for EPUB 3.0
         const ncxItem = $('manifest item[media-type="application/x-dtbncx+xml"]');
         if (ncxItem.length > 0) {
-            warnings.push('NCX file found - consider removing as it\'s deprecated in EPUB 3.0');
+            ncxItem.remove();
+            changes.push('Removed NCX file from manifest (deprecated in EPUB 3.0)');
+            
+            // Also remove any reference to NCX in guide
+            $('guide reference[type="toc"]').remove();
+            changes.push('Removed NCX reference from guide');
         }
     }
 
@@ -352,6 +434,29 @@ export class Epub2To3Converter {
                         this.logger.info(`Fixed DOCTYPE in ${filePath}`);
                     }
 
+                    // Fix invalid http-equiv values in meta tags
+                    const validHttpEquivValues = [
+                        'content-security-policy',
+                        'content-type',
+                        'default-style',
+                        'refresh',
+                        'x-ua-compatible'
+                    ];
+                    
+                    // Replace invalid http-equiv values with valid ones or remove them
+                    content = content.replace(
+                        /<meta([^>]*)http-equiv\s*=\s*["']([^"']*)["']([^>]*)>/gi,
+                        (match, before, value, after) => {
+                            const lowerValue = value.toLowerCase();
+                            if (validHttpEquivValues.includes(lowerValue)) {
+                                return match; // Keep valid values
+                            } else {
+                                // Remove the entire meta tag if it's invalid
+                                return '';
+                            }
+                        }
+                    );
+
                     // Ensure proper XML declaration for XHTML files
                     if (filePath.endsWith('.xhtml') && !content.startsWith('<?xml')) {
                         content = '<?xml version="1.0" encoding="UTF-8"?>\n' + content;
@@ -401,6 +506,7 @@ export class Epub2To3Converter {
         // Build landmarks with first spine item as bodymatter
         const firstSpineHref = spineItems.length > 0 ? spineItems[0].href : 'content.xhtml';
 
+        // Create navigation document with proper role attributes that are valid in EPUB
         return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
@@ -414,10 +520,10 @@ export class Epub2To3Converter {
         <ol>${tocEntries}
         </ol>
     </nav>
-    <nav epub:type="landmarks" id="landmarks" role="doc-landmarks" hidden="">
+    <nav epub:type="landmarks" id="landmarks" role="navigation" hidden="">
         <h1>Landmarks</h1>
         <ol>
-            <li><a href="${firstSpineHref}" epub:type="bodymatter">Content</a></li>
+            <li><a href="${firstSpineHref}" epub:type="bodymatter" role="doc-biblioref">Content</a></li>
         </ol>
     </nav>
 </body>
