@@ -106,6 +106,8 @@ export interface CliOptions {
     skipAccessibility?: boolean;
     dryRun?: boolean;
     keepOutput?: boolean;
+    verify?: boolean;
+    useGemini?: boolean;  // New option to use Gemini instead of Ollama
 }
 
 export interface FixerConfig {

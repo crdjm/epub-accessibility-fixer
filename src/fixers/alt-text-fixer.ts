@@ -5,6 +5,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import axios from 'axios';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 type Cheerio = any;
 type CheerioStatic = any;
@@ -317,14 +318,21 @@ export class AltTextFixer extends BaseFixer {
 
             this.logger.info(`Analyzing image content: ${imagePath}`);
 
+            // Check if we should use Gemini instead of Ollama
+            const useGemini = context.options?.useGemini || false;
+            
             // Try different analysis methods in order of preference
-            let result = await this.tryLocalAIAnalysis(imagePath);
-            if (result) return result;
+            if (useGemini) {
+                // Use Gemini AI analysis
+                let result = await this.tryGeminiAIAnalysis(imagePath);
+                if (result) return result;
+            } else {
+                // Use Ollama AI analysis
+                let result = await this.tryLocalAIAnalysis(imagePath);
+                if (result) return result;
+            }
 
-            result = await this.tryOCRAnalysis(imagePath);
-            if (result) return result;
-
-            result = await this.tryCloudAIAnalysis(imagePath);
+            let result = await this.tryOCRAnalysis(imagePath);
             if (result) return result;
 
             result = await this.tryImageMetadataAnalysis(imagePath);
@@ -419,6 +427,176 @@ export class AltTextFixer extends BaseFixer {
     }
 
     /**
+     * Try cloud AI services (placeholder for future implementation)
+     */
+    private async tryCloudAIAnalysis(imagePath: string): Promise<ImageAnalysisResult | null> {
+        // This is a placeholder for cloud AI services like:
+        // - Google Vision API
+        // - Azure Computer Vision
+        // - AWS Rekognition
+        // - OpenAI Vision API
+
+        // For now, we'll skip cloud analysis to avoid API costs and dependencies
+        this.logger.info('Cloud AI analysis not implemented yet');
+        return null;
+    }
+
+    /**
+     * Try Gemini AI analysis for image content
+     */
+    private async tryGeminiAIAnalysis(imagePath: string): Promise<ImageAnalysisResult | null> {
+        try {
+            // Check if Gemini API key is available
+            const apiKey = process.env.GEMINI_API_KEY;
+            if (!apiKey) {
+                this.logger.info('Gemini API key not found in GEMINI_API_KEY environment variable');
+                return null;
+            }
+
+            // Initialize Google Generative AI
+            const genAI = new GoogleGenerativeAI(apiKey);
+            
+            // Get the vision model
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            // Read image file
+            const imageBuffer = await fs.readFile(imagePath);
+            
+            // Create prompt for alt text generation
+            const prompt = `Create alt text for this EPUB image that will help screen reader users understand the visual content.
+
+Focus on:
+- Character names and their actions/expressions  
+- Important visual elements for the story
+- Setting details that matter to understanding
+
+Avoid starting with "image of" or "picture of". Be descriptive but concise.
+
+Final alt text:`;
+
+            // Create image part for Gemini
+            const imagePart = {
+                inlineData: {
+                    data: imageBuffer.toString('base64'),
+                    mimeType: this.getMimeType(path.extname(imagePath).toLowerCase())
+                }
+            };
+
+            this.logger.info('Sending image analysis request to Gemini...');
+
+            // Generate content
+            const result = await model.generateContent([prompt, imagePart]);
+            const response = await result.response;
+            const text = response.text().trim();
+
+            if (text) {
+                // Clean up the response
+                let description = text;
+                
+                // Look for alt text after common prefixes
+                const altTextPrefixes = [
+                    'Final alt text:',
+                    'final alt text:',
+                    'Alt text:',
+                    'alt text:',
+                    'Description:',
+                    'Image description:'
+                ];
+                
+                for (const prefix of altTextPrefixes) {
+                    if (description.includes(prefix)) {
+                        const afterPrefix = description.split(prefix).pop();
+                        if (afterPrefix && afterPrefix.trim()) {
+                            description = afterPrefix.trim();
+                            this.logger.info(`Extracted alt text using prefix "${prefix}": "${description}"`);
+                            break;
+                        }
+                    }
+                }
+                
+                // Clean up the response
+                description = description
+                    .replace(/^["']|["']$/g, '') // Remove quotes
+                    .replace(/\n+/g, ' ') // Replace newlines with spaces
+                    .replace(/\s+/g, ' ') // Normalize whitespace
+                    .trim();
+                
+                // Filter out generic or unhelpful descriptions
+                const genericPhrases = [
+                    'this is an image',
+                    'the image shows',
+                    'this image contains',
+                    'the picture depicts',
+                    'this illustration',
+                    'a colorful illustration',
+                    'an image of'
+                ];
+                
+                // Remove generic prefixes
+                for (const phrase of genericPhrases) {
+                    if (description.toLowerCase().startsWith(phrase)) {
+                        description = description.substring(phrase.length).trim();
+                        break;
+                    }
+                }
+                
+                // Check for responses indicating the model didn't receive the image
+                const noImageIndicators = [
+                    'please provide the image',
+                    'describe it for me',
+                    'i cannot see',
+                    'no image provided',
+                    'unable to see'
+                ];
+                
+                const hasNoImageIndicator = noImageIndicators.some(indicator => 
+                    description.toLowerCase().includes(indicator)
+                );
+                
+                if (hasNoImageIndicator) {
+                    this.logger.warn(`Gemini indicates it cannot see the image: "${description}"`);
+                    return null;
+                }
+                
+                // Ensure the description is reasonable length and quality
+                if (description.length > 5 && description.length < 400) {
+                    // Capitalize first letter if needed
+                    if (description.length > 0) {
+                        description = description.charAt(0).toUpperCase() + description.slice(1);
+                    }
+                    
+                    // Remove any trailing periods and add one
+                    description = description.replace(/\.+$/, '') + '.';
+                    
+                    this.logger.info(`Final processed description from Gemini: "${description}"`);
+                    
+                    return {
+                        description: description,
+                        confidence: 0.9, // High confidence for Gemini analysis
+                        source: 'ai',
+                        details: {
+                            model: 'gemini-1.5-flash',
+                            source: 'gemini',
+                            imageSize: imageBuffer.length,
+                            imageFormat: path.extname(imagePath).toLowerCase()
+                        }
+                    };
+                }
+                
+                this.logger.warn(`Gemini response too short or long: "${text}"`);
+            } else {
+                this.logger.warn('Gemini returned empty response');
+            }
+
+            return null;
+
+        } catch (error: any) {
+            this.logger.error(`Gemini image analysis failed: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
      * Try OCR analysis to extract text from images
      */
     private async tryOCRAnalysis(imagePath: string): Promise<ImageAnalysisResult | null> {
@@ -461,21 +639,6 @@ export class AltTextFixer extends BaseFixer {
             this.logger.info(`OCR analysis failed: ${error}`);
             return null;
         }
-    }
-
-    /**
-     * Try cloud AI services (placeholder for future implementation)
-     */
-    private async tryCloudAIAnalysis(imagePath: string): Promise<ImageAnalysisResult | null> {
-        // This is a placeholder for cloud AI services like:
-        // - Google Vision API
-        // - Azure Computer Vision
-        // - AWS Rekognition
-        // - OpenAI Vision API
-
-        // For now, we'll skip cloud analysis to avoid API costs and dependencies
-        this.logger.info('Cloud AI analysis not implemented yet');
-        return null;
     }
 
     /**

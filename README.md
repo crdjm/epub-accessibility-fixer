@@ -7,6 +7,7 @@ A comprehensive CLI tool for analyzing and automatically fixing EPUB validation 
 - **Comprehensive Analysis**: Uses EpubCheck for validation and DAISY ACE for accessibility analysis
 - **Automatic Fixes**: Intelligently fixes issues like missing alt text, heading structure problems, language attributes, and more
 - **AI-Powered Alt Text**: Generates meaningful alt text using local AI vision models, OCR, and metadata analysis
+- **Gemini AI Support**: Optional integration with Google's Gemini AI models for enhanced alt text generation
 - **AI Review Interface**: Dedicated review page for all AI-generated alt text with visual verification
 - **Detailed Reporting**: Generates beautiful HTML reports with actionable insights
 - **Priority-based Processing**: Categorizes and prioritizes issues for optimal fixing order
@@ -36,7 +37,7 @@ npm install epub-accessibility-fixer
 
 ### Analyze an EPUB
 
-```bash
+``bash
 epub-fix book.epub --analyze-only
 ```
 
@@ -380,3 +381,37 @@ For issues and questions:
 ---
 
 **Note**: This tool aims to automatically fix as many issues as possible, but some accessibility improvements may require human judgment. Always review the generated reports and test your EPUBs with actual assistive technologies.
+
+### AI-Powered Alt Text Generation
+
+The tool can automatically generate meaningful alt text for images using various AI techniques:
+
+1. **Local AI Vision Models** (default): Uses Ollama with vision-capable models like LLaVA or Moondream
+2. **Gemini AI Models** (optional): Uses Google's Gemini AI for enhanced image understanding
+3. **OCR Text Extraction**: Extracts text from images using Tesseract OCR
+4. **Metadata Analysis**: Reads existing image metadata for descriptions
+5. **Contextual Enhancement**: Combines AI analysis with surrounding HTML context
+
+#### Using Local AI (Ollama)
+
+To use local AI models:
+
+1. Install [Ollama](https://ollama.ai/)
+2. Pull a vision model: `ollama pull llava:7b` or `ollama pull moondream:1.8b`
+3. Run the tool normally - it will automatically detect and use available vision models
+
+#### Using Gemini AI
+
+To use Google's Gemini AI models instead of local AI:
+
+1. Get a [Google AI API key](https://aistudio.google.com/)
+2. Set the API key as an environment variable:
+   ```bash
+   export GEMINI_API_KEY=your_api_key_here
+   ```
+3. Run the tool with the `--use-gemini` flag:
+   ```bash
+   epub-fix book.epub --use-gemini
+   ```
+
+The Gemini option provides access to more powerful AI models that may generate higher quality alt text, but requires an internet connection and may incur API costs depending on your usage.

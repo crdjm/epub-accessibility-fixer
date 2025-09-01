@@ -15,6 +15,117 @@ import { Epub2To3Converter } from './core/epub2-to-3-converter';
 
 const program = new Command();
 
+/**
+ * Run verification by re-running validation tools on the fixed EPUB
+ */
+async function runVerification(
+    fixedEpubPath: string, 
+    processor: EpubAccessibilityProcessor, 
+    logger: Logger, 
+    inputBasename: string, 
+    inputDir: string
+): Promise<void> {
+    const spinner = ora();
+    
+    try {
+        console.log(`\n${chalk.blue('🔍 Verification Phase:')}`);
+        console.log(`Re-running validation tools on the fixed EPUB to verify fixes...`);
+        
+        // Create timestamped directory for verification output
+        const timestamp = Date.now();
+        const verifyDir = path.join(inputDir, `${inputBasename}_verification_${timestamp}`);
+        await fs.ensureDir(verifyDir);
+        
+        // Create verification options that force keeping output files
+        const verifyOptions: CliOptions = {
+            input: fixedEpubPath,
+            analyze: true, // Analysis only for verification
+            verbose: logger.isVerbose(),
+            keepOutput: true // Always keep verification output
+        };
+        
+        spinner.start('Running verification analysis...');
+        
+        // Process the fixed EPUB with analysis only
+        const verifyResult = await processor.processEpub(verifyOptions, loadConfig());
+        
+        spinner.succeed('Verification complete');
+        
+        // Move output files to verification directory if they exist
+        if (verifyResult.outputFiles) {
+            if (verifyResult.outputFiles.epubCheck) {
+                const verifyEpubCheckPath = path.join(verifyDir, 'epubcheck_verification.json');
+                await fs.move(verifyResult.outputFiles.epubCheck, verifyEpubCheckPath);
+                verifyResult.outputFiles.epubCheck = verifyEpubCheckPath;
+            }
+            
+            if (verifyResult.outputFiles.daisyAce) {
+                const verifyDaisyPath = path.join(verifyDir, 'daisy_ace_verification');
+                await fs.move(verifyResult.outputFiles.daisyAce, verifyDaisyPath);
+                verifyResult.outputFiles.daisyAce = verifyDaisyPath;
+            }
+        }
+        
+        // Display verification results
+        console.log(`\n${chalk.bold('Verification Results:')}`);
+        
+        const verifyValidationErrors = verifyResult.validation.issues.filter(i => i.type === 'error').length;
+        const verifyValidationWarnings = verifyResult.validation.issues.filter(i => i.type === 'warning').length;
+        const verifyAccessibilityIssues = verifyResult.accessibility.issues.length;
+        
+        // Validation results
+        if (verifyValidationErrors === 0) {
+            console.log(`${chalk.green('✓ Validation:')} No errors found`);
+        } else {
+            console.log(`${chalk.red('✗ Validation:')} ${verifyValidationErrors} errors remaining`);
+        }
+        
+        if (verifyValidationWarnings > 0) {
+            console.log(`${chalk.yellow('⚠️  Validation warnings:')} ${verifyValidationWarnings}`);
+        }
+        
+        // Accessibility results
+        if (verifyAccessibilityIssues === 0) {
+            console.log(`${chalk.green('✓ Accessibility:')} No issues found`);
+        } else {
+            console.log(`${chalk.red('✗ Accessibility:')} ${verifyAccessibilityIssues} issues remaining`);
+        }
+        
+        // Overall score
+        if (verifyResult.accessibility.score !== undefined) {
+            const scoreColor = verifyResult.accessibility.score >= 90 ? chalk.green : 
+                              verifyResult.accessibility.score >= 70 ? chalk.yellow : chalk.red;
+            console.log(`${chalk.cyan('Accessibility Score:')} ${scoreColor(`${verifyResult.accessibility.score}/100`)}`);
+        }
+        
+        console.log(`\n${chalk.blue('Verification Files Saved:')}`);
+        console.log(`${chalk.gray('Directory:')} ${verifyDir}`);
+        if (verifyResult.outputFiles?.epubCheck) {
+            console.log(`${chalk.gray('EpubCheck:')} ${path.basename(verifyResult.outputFiles.epubCheck)}`);
+        }
+        if (verifyResult.outputFiles?.daisyAce) {
+            console.log(`${chalk.gray('DAISY ACE:')} ${path.basename(verifyResult.outputFiles.daisyAce)}`);
+        }
+        
+        // Summary message
+        if (verifyValidationErrors === 0 && verifyAccessibilityIssues === 0) {
+            console.log(`\n${chalk.green('🎉 Success!')} All fixes verified successfully - no issues remaining.`);
+        } else if (verifyValidationErrors === 0) {
+            console.log(`\n${chalk.yellow('📝 Note:')} Validation issues resolved, but ${verifyAccessibilityIssues} accessibility issues remain.`);
+        } else {
+            console.log(`\n${chalk.red('⚠️  Warning:')} Some issues remain after fixing. Manual intervention may be required.`);
+        }
+        
+    } catch (error: any) {
+        spinner.fail('Verification failed');
+        console.error(chalk.red(`\nVerification error: ${error.message}`));
+        if (logger.isVerbose()) {
+            console.error(chalk.gray('Stack trace:'));
+            console.error(chalk.gray(error.stack));
+        }
+    }
+}
+
 program
     .name('epub-fix')
     .description('CLI tool for analyzing and fixing EPUB accessibility issues')
@@ -30,6 +141,8 @@ program
     .option('--skip-accessibility', 'Skip accessibility analysis')
     .option('--dry-run', 'Show what would be fixed without making changes')
     .option('--keep-output', 'Keep DAISY ACE and EpubCheck output files for manual review')
+    .option('--verify', 'Re-run validation tools on the fixed EPUB to verify fixes were successful')
+    .option('--use-gemini', 'Use Gemini AI models for alt text generation instead of Ollama')
     .option('-v, --verbose', 'Verbose output')
     .action(async (input: string, options: any) => {
         const spinner = ora();
@@ -117,7 +230,8 @@ program
                 skipValidation: options.skipValidation || false,
                 skipAccessibility: options.skipAccessibility || false,
                 dryRun: options.dryRun || false,
-                keepOutput: options.keepOutput || false
+                keepOutput: options.keepOutput || false,
+                verify: options.verify || false
             };
 
             // Initialize logger
@@ -205,6 +319,15 @@ program
                 }
                 if (result.outputFiles.epubCheck) {
                     console.log(`EpubCheck Output: ${result.outputFiles.epubCheck}`);
+                }
+            }
+
+            // Run verification if requested and fixes were applied
+            if (cliOptions.verify && !cliOptions.analyze && !cliOptions.dryRun && cliOptions.output) {
+                if (await fs.pathExists(cliOptions.output)) {
+                    await runVerification(cliOptions.output, processor, logger, inputBasename, inputDir);
+                } else {
+                    console.log(`\n${chalk.yellow('⚠️  Verification skipped: Fixed EPUB not found')}`);
                 }
             }
 
