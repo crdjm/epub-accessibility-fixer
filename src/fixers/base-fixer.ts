@@ -39,7 +39,8 @@ export abstract class BaseFixer {
         // Check if this is an XML document
         if (content.mediaType === 'application/oebps-package+xml' || content.path.endsWith('.opf')) {
             // For OPF files, we need to preserve XML structure and self-closing tags
-            content.content = $.html();
+            // Use XML mode to properly serialize
+            content.content = $.xml();
             // Ensure proper XML declaration if missing
             if (typeof content.content === 'string' && !content.content.startsWith('<?xml')) {
                 content.content = '<?xml version="1.0" encoding="UTF-8"?>\n' + content.content;

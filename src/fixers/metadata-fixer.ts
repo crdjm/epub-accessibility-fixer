@@ -53,8 +53,18 @@ export class MetadataFixer extends BaseFixer {
         if (issueMessageLower.includes('schema:accessibilityfeature') ||
             issueMessageLower.includes('schema:accessibilityhazard') ||
             issueMessageLower.includes('schema:accessibilitysummary') ||
-            issueMessageLower.includes('must declare') && issueMessageLower.includes('metadata')) {
+            issueMessageLower.includes('accessmode') ||
+            (issueMessageLower.includes('must declare') && issueMessageLower.includes('metadata'))) {
             this.logger.info(`MetadataFixer can fix issue: matched by message content`);
+            return true;
+        }
+
+        // Specifically handle RSC-005 errors that contain xsi:type or EPUB 2.0 attributes
+        if (issue.code === 'RSC-005' && 
+            (issueMessageLower.includes('xsi:type') || 
+             issueMessageLower.includes('dcterms:rfc4646') ||
+             issueMessageLower.includes('attribute') && issueMessageLower.includes('not allowed'))) {
+            this.logger.info(`MetadataFixer can fix RSC-005 issue with EPUB 2.0 attributes`);
             return true;
         }
 
@@ -88,12 +98,26 @@ export class MetadataFixer extends BaseFixer {
             let fixApplied = false;
             let fixDescription = '';
 
-            // Handle language metadata
+            // Handle language metadata AND EPUB 2.0 attribute issues
             if (issue.code.includes('RSC-005') || issue.code.includes('epub-lang')) {
-                this.logger.info('Attempting to fix language metadata');
+                this.logger.info('Attempting to fix language metadata and EPUB 2.0 attributes');
+                
+                // First, handle EPUB 2.0 attribute removal if needed
+                if (issue.message.includes('xsi:type') || 
+                    issue.message.includes('dcterms:RFC4646') ||
+                    issue.message.includes('attribute') && issue.message.includes('not allowed')) {
+                    this.logger.info('RSC-005 issue involves EPUB 2.0 attributes - applying upgrade');
+                    const upgraded = this.upgradeToEpub3($);
+                    if (upgraded) {
+                        fixApplied = true;
+                        fixDescription = 'Removed EPUB 2.0 attributes and upgraded to EPUB 3.0';
+                    }
+                }
+                
+                // Then handle language metadata
                 if (this.fixLanguageMetadata($, context)) {
                     fixApplied = true;
-                    fixDescription = 'Added language metadata to OPF';
+                    fixDescription += (fixDescription ? '; ' : '') + 'Added language metadata to OPF';
                 }
             }
 
@@ -157,8 +181,9 @@ export class MetadataFixer extends BaseFixer {
                 // Update existing empty element
                 existingLang.text(language);
             } else {
-                // Add new language element with proper formatting
-                metadata.append(`\n    <dc:language>${language}</dc:language>`);
+                // Add new language element with proper formatting using DOM manipulation
+                const langElement = $('<dc:language>').text(language);
+                metadata.append('\n    ').append(langElement);
             }
             fixApplied = true;
         }
@@ -175,6 +200,21 @@ export class MetadataFixer extends BaseFixer {
         }
 
         return fixApplied;
+    }
+
+    /**
+     * Create a metadata element with the appropriate format for EPUB version
+     */
+    private createMetadataElement(property: string, value: string, isEpub3: boolean): string {
+        const escapedValue = this.escapeXml(value);
+
+        if (isEpub3) {
+            // EPUB 3 format: <meta property="schema:xxx">value</meta>
+            return `\n    <meta property="${property}">${escapedValue}</meta>`;
+        } else {
+            // EPUB 2 format: <meta name="schema:xxx" content="value" />
+            return `\n    <meta name="${property}" content="${escapedValue}" />`;
+        }
     }
 
     /**
@@ -219,8 +259,9 @@ export class MetadataFixer extends BaseFixer {
             const accessModes = this.detectAccessModes(context);
             this.logger.info(`Adding schema:accessMode metadata: ${accessModes.join(', ')}`);
             accessModes.forEach(mode => {
-                const metaXml = this.createMetadataElement('schema:accessMode', mode, useEpub3Format);
-                metadata.append(metaXml);
+                // Use proper DOM manipulation instead of string concatenation
+                const metaElement = $('<meta>').attr('property', 'schema:accessMode').text(mode);
+                metadata.append('\n    ').append(metaElement);
             });
             fixes.push(`Added schema:accessMode metadata: ${accessModes.join(', ')}`);
         }
@@ -229,8 +270,9 @@ export class MetadataFixer extends BaseFixer {
         if (!this.hasMetadata($, 'schema:accessModeSufficient')) {
             const sufficientModes = this.detectAccessModeSufficient(context);
             this.logger.info(`Adding schema:accessModeSufficient metadata: ${sufficientModes}`);
-            const metaXml = this.createMetadataElement('schema:accessModeSufficient', sufficientModes, useEpub3Format);
-            metadata.append(metaXml);
+            // Use proper DOM manipulation instead of string concatenation
+            const metaElement = $('<meta>').attr('property', 'schema:accessModeSufficient').text(sufficientModes);
+            metadata.append('\n    ').append(metaElement);
             fixes.push(`Added schema:accessModeSufficient metadata: ${sufficientModes}`);
         }
 
@@ -239,8 +281,9 @@ export class MetadataFixer extends BaseFixer {
             const features = this.detectAccessibilityFeatures(context);
             this.logger.info(`Adding schema:accessibilityFeature metadata: ${features.join(', ')}`);
             features.forEach(feature => {
-                const metaXml = this.createMetadataElement('schema:accessibilityFeature', feature, useEpub3Format);
-                metadata.append(metaXml);
+                // Use proper DOM manipulation instead of string concatenation
+                const metaElement = $('<meta>').attr('property', 'schema:accessibilityFeature').text(feature);
+                metadata.append('\n    ').append(metaElement);
             });
             fixes.push(`Added schema:accessibilityFeature metadata: ${features.join(', ')}`);
         }
@@ -250,8 +293,9 @@ export class MetadataFixer extends BaseFixer {
             const hazards = this.detectAccessibilityHazards(context);
             this.logger.info(`Adding schema:accessibilityHazard metadata: ${hazards.join(', ')}`);
             hazards.forEach(hazard => {
-                const metaXml = this.createMetadataElement('schema:accessibilityHazard', hazard, useEpub3Format);
-                metadata.append(metaXml);
+                // Use proper DOM manipulation instead of string concatenation
+                const metaElement = $('<meta>').attr('property', 'schema:accessibilityHazard').text(hazard);
+                metadata.append('\n    ').append(metaElement);
             });
             fixes.push(`Added schema:accessibilityHazard metadata: ${hazards.join(', ')}`);
         }
@@ -260,8 +304,9 @@ export class MetadataFixer extends BaseFixer {
         if (!this.hasMetadata($, 'schema:accessibilitySummary')) {
             const summary = this.generateAccessibilitySummary(context);
             this.logger.info(`Adding schema:accessibilitySummary metadata`);
-            const metaXml = this.createMetadataElement('schema:accessibilitySummary', summary, useEpub3Format);
-            metadata.append(metaXml);
+            // Use proper DOM manipulation instead of string concatenation
+            const metaElement = $('<meta>').attr('property', 'schema:accessibilitySummary').text(summary);
+            metadata.append('\n    ').append(metaElement);
             fixes.push('Added schema:accessibilitySummary metadata');
         }
 
@@ -293,8 +338,9 @@ export class MetadataFixer extends BaseFixer {
                 const accessModes = this.detectAccessModes(context);
                 this.logger.info(`Detected access modes: ${accessModes.join(', ')}`);
                 accessModes.forEach(mode => {
-                    const metaElement = `<meta property="schema:accessMode">${this.escapeXml(mode)}</meta>`;
-                    metadata.append(metaElement);
+                    // Use proper DOM manipulation instead of string concatenation
+                    const metaElement = $('<meta>').attr('property', 'schema:accessMode').text(mode);
+                    metadata.append('\n    ').append(metaElement);
                 });
                 fixDescription = `Added schema:accessMode metadata: ${accessModes.join(', ')}`;
             } else {
@@ -306,8 +352,9 @@ export class MetadataFixer extends BaseFixer {
             if (!this.hasMetadata($, 'schema:accessModeSufficient')) {
                 const sufficientModes = this.detectAccessModeSufficient(context);
                 this.logger.info(`Detected sufficient modes: ${sufficientModes}`);
-                const metaElement = `<meta property="schema:accessModeSufficient">${this.escapeXml(sufficientModes)}</meta>`;
-                metadata.append(metaElement);
+                // Use proper DOM manipulation instead of string concatenation
+                const metaElement = $('<meta>').attr('property', 'schema:accessModeSufficient').text(sufficientModes);
+                metadata.append('\n    ').append(metaElement);
                 fixDescription = `Added schema:accessModeSufficient metadata: ${sufficientModes}`;
             } else {
                 this.logger.info('schema:accessModeSufficient already exists');
@@ -319,8 +366,9 @@ export class MetadataFixer extends BaseFixer {
                 const features = this.detectAccessibilityFeatures(context);
                 this.logger.info(`Detected accessibility features: ${features.join(', ')}`);
                 features.forEach(feature => {
-                    const metaElement = `<meta property="schema:accessibilityFeature">${this.escapeXml(feature)}</meta>`;
-                    metadata.append(metaElement);
+                    // Use proper DOM manipulation instead of string concatenation
+                    const metaElement = $('<meta>').attr('property', 'schema:accessibilityFeature').text(feature);
+                    metadata.append('\n    ').append(metaElement);
                 });
                 fixDescription = `Added schema:accessibilityFeature metadata: ${features.join(', ')}`;
             } else {
@@ -333,8 +381,9 @@ export class MetadataFixer extends BaseFixer {
                 const hazards = this.detectAccessibilityHazards(context);
                 this.logger.info(`Detected accessibility hazards: ${hazards.join(', ')}`);
                 hazards.forEach(hazard => {
-                    const metaElement = `<meta property="schema:accessibilityHazard">${this.escapeXml(hazard)}</meta>`;
-                    metadata.append(metaElement);
+                    // Use proper DOM manipulation instead of string concatenation
+                    const metaElement = $('<meta>').attr('property', 'schema:accessibilityHazard').text(hazard);
+                    metadata.append('\n    ').append(metaElement);
                 });
                 fixDescription = `Added schema:accessibilityHazard metadata: ${hazards.join(', ')}`;
             } else {
@@ -346,8 +395,9 @@ export class MetadataFixer extends BaseFixer {
             if (!this.hasMetadata($, 'schema:accessibilitySummary')) {
                 const summary = this.generateAccessibilitySummary(context);
                 this.logger.info(`Generated accessibility summary: ${summary}`);
-                const metaElement = `<meta property="schema:accessibilitySummary">${this.escapeXml(summary)}</meta>`;
-                metadata.append(metaElement);
+                // Use proper DOM manipulation instead of string concatenation
+                const metaElement = $('<meta>').attr('property', 'schema:accessibilitySummary').text(summary);
+                metadata.append('\n    ').append(metaElement);
                 fixDescription = 'Added schema:accessibilitySummary metadata';
             } else {
                 this.logger.info('schema:accessibilitySummary already exists');
@@ -363,21 +413,6 @@ export class MetadataFixer extends BaseFixer {
 
         this.logger.warn(`No accessibility metadata fix applied for: ${issueCode}`);
         return null;
-    }
-
-    /**
-     * Create a metadata element with the appropriate format for EPUB version
-     */
-    private createMetadataElement(property: string, value: string, isEpub3: boolean): string {
-        const escapedValue = this.escapeXml(value);
-
-        if (isEpub3) {
-            // EPUB 3 format: <meta property="schema:xxx">value</meta>
-            return `\n    <meta property="${property}">${escapedValue}</meta>`;
-        } else {
-            // EPUB 2 format: <meta name="schema:xxx" content="value" />
-            return `\n    <meta name="${property}" content="${escapedValue}" />`;
-        }
     }
 
     private hasMetadata($: CheerioStatic, property: string): boolean {
@@ -661,18 +696,26 @@ export class MetadataFixer extends BaseFixer {
             this.logger.info('Starting comprehensive EPUB 2.0 to 3.0 upgrade');
 
             // 1. Update version to 3.0
+            const currentVersion = packageElement.attr('version');
+            this.logger.info(`Current EPUB version: ${currentVersion}`);
+            
+            if (currentVersion && currentVersion.startsWith('3')) {
+                this.logger.info('Already EPUB 3.x, no upgrade needed');
+                // Still run attribute cleanup to ensure EPUB 2.0 attributes are removed
+                this.removeEpub2Attributes($);
+                return true;
+            }
+            
             packageElement.attr('version', '3.0');
             
             // 2. Ensure proper EPUB 3.0 namespace
-            const currentXmlns = packageElement.attr('xmlns');
-            if (currentXmlns !== 'http://www.idpf.org/2007/opf') {
-                packageElement.attr('xmlns', 'http://www.idpf.org/2007/opf');
-            }
-
-            // 3. Add prefix attribute for schema.org metadata
+            packageElement.attr('xmlns', 'http://www.idpf.org/2007/opf');
+            
+            // 3. Add prefix attribute for schema.org metadata if not present
             const prefixAttr = packageElement.attr('prefix');
             if (!prefixAttr || !prefixAttr.includes('schema:')) {
-                packageElement.attr('prefix', 'schema: http://schema.org/');
+                const newPrefix = prefixAttr ? `${prefixAttr} schema: http://schema.org/` : 'schema: http://schema.org/';
+                packageElement.attr('prefix', newPrefix.trim());
             }
 
             // 4. Remove EPUB 2.0-specific attributes from metadata elements
@@ -696,13 +739,14 @@ export class MetadataFixer extends BaseFixer {
     private removeEpub2Attributes($: CheerioStatic): void {
         this.logger.info('Removing EPUB 2.0-specific attributes');
         
+        let removedCount = 0;
+        
         // Remove opf:file-as attributes from dc:creator and other elements
         $('dc\\:creator[opf\\:file-as], creator[opf\\:file-as]').each((_, element) => {
             const $element = $(element);
             const fileAs = $element.attr('opf:file-as');
             $element.removeAttr('opf:file-as');
-            // In EPUB 3, file-as is handled differently via meta elements
-            // For now, we'll just remove it to avoid validation errors
+            removedCount++;
             this.logger.info(`Removed opf:file-as="${fileAs}" from creator element`);
         });
 
@@ -711,6 +755,7 @@ export class MetadataFixer extends BaseFixer {
             const $element = $(element);
             const scheme = $element.attr('opf:scheme');
             $element.removeAttr('opf:scheme');
+            removedCount++;
             this.logger.info(`Removed opf:scheme="${scheme}" from identifier element`);
         });
 
@@ -719,8 +764,30 @@ export class MetadataFixer extends BaseFixer {
             const $element = $(element);
             const event = $element.attr('opf:event');
             $element.removeAttr('opf:event');
+            removedCount++;
             this.logger.info(`Removed opf:event="${event}" from date element`);
         });
+
+        // Remove xsi:type attributes from dc:language and other Dublin Core elements (EPUB 2.0 specific)
+        $('dc\\:language[xsi\\:type], language[xsi\\:type]').each((_, element) => {
+            const $element = $(element);
+            const type = $element.attr('xsi:type');
+            $element.removeAttr('xsi:type');
+            removedCount++;
+            this.logger.info(`Removed xsi:type="${type}" from language element`);
+        });
+
+        // Remove any other xsi:type attributes from Dublin Core elements
+        $('dc\\:*[xsi\\:type]').each((_, element) => {
+            const $element = $(element);
+            const type = $element.attr('xsi:type');
+            const tagName = element.tagName || 'unknown';
+            $element.removeAttr('xsi:type');
+            removedCount++;
+            this.logger.info(`Removed xsi:type="${type}" from ${tagName} element`);
+        });
+        
+        this.logger.info(`Removed ${removedCount} EPUB 2.0-specific attributes`);
     }
 
     /**

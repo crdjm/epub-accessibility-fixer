@@ -10,6 +10,7 @@ import { ColorContrastFixer } from '../fixers/color-contrast-fixer';
 import { LinkAccessibilityFixer } from '../fixers/link-accessibility-fixer';
 import { InteractiveElementFixer } from '../fixers/interactive-element-fixer';
 import { ResourceReferenceFixer } from '../fixers/resource-reference-fixer';
+import { ValidationStructureFixer } from '../fixers/validation-structure-fixer';
 
 export class FixerOrchestrator {
     private logger: Logger;
@@ -22,6 +23,7 @@ export class FixerOrchestrator {
 
     private initializeFixers(): void {
         this.fixers = [
+            new ValidationStructureFixer(this.logger), // Fix structural validation issues first
             new MetadataFixer(this.logger),          // Fix metadata first - foundational
             new LanguageAttributeFixer(this.logger),  // Fix language attributes - affects other fixes
             new TitleFixer(this.logger),             // Fix document titles
@@ -62,6 +64,9 @@ export class FixerOrchestrator {
 
                     // Mark similar issues as fixed to avoid duplicate processing
                     this.markSimilarIssuesFixed(issue, context);
+                } else {
+                    this.logger.warn(`Failed to fix issue: ${issue.code} - ${result.message}`);
+                    // Don't mark as fixed if the fix failed
                 }
             } catch (error) {
                 this.logger.error(`Failed to fix issue ${issue.code}: ${error}`);
@@ -121,13 +126,13 @@ export class FixerOrchestrator {
         // For language-related fixes, mark all language issues as fixed since they're typically global
         if (fixedIssue.code.includes('html-has-lang') ||
             fixedIssue.code.includes('missing-lang') ||
-            fixedIssue.code.includes('RSC-005') ||
+            (fixedIssue.code.includes('RSC-005') && fixedIssue.message.toLowerCase().includes('language')) ||
             fixedIssue.code.includes('epub-lang')) {
             const languageIssues = context.issues.filter(issue =>
                 !issue.fixed &&
                 (issue.code.includes('html-has-lang') ||
                     issue.code.includes('missing-lang') ||
-                    issue.code.includes('RSC-005') ||
+                    (issue.code.includes('RSC-005') && issue.message.toLowerCase().includes('language')) ||
                     issue.code.includes('epub-lang'))
             );
 
@@ -135,6 +140,71 @@ export class FixerOrchestrator {
                 issue.fixed = true;
                 this.logger.info(`Marked similar language issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
             });
+        }
+        // For validation structure issues, be more careful about marking RSC-005 issues as fixed
+        else if (fixedIssue.code.includes('RSC-005') && 
+                 fixerForThisIssue.getFixerName() === 'Validation Structure Fixer') {
+            // Check if this is an http-equiv issue - these should be handled per-file
+            if (fixedIssue.message.toLowerCase().includes('http-equiv')) {
+                // Only mark issues in the same file as fixed, not all RSC-005 issues
+                // But be more specific - only mark identical http-equiv issues as fixed
+                const sameFileHttpEquivIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    issue.code === fixedIssue.code &&
+                    issue.location?.file === fixedIssue.location?.file &&
+                    issue.message.toLowerCase().includes('http-equiv')
+                );
+
+                sameFileHttpEquivIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked http-equiv validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                });
+            }
+            // Check if this is a role attribute issue - these should also be handled per-file
+            else if (fixedIssue.message.toLowerCase().includes('role')) {
+                // Only mark issues in the same file as fixed, not all RSC-005 issues
+                const sameFileRoleIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    issue.code === fixedIssue.code &&
+                    issue.location?.file === fixedIssue.location?.file &&
+                    issue.message.toLowerCase().includes('role')
+                );
+
+                sameFileRoleIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked role validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                });
+            }
+            // Check if this is an xsi:type attribute issue
+            else if (fixedIssue.message.toLowerCase().includes('xsi:type') || 
+                     fixedIssue.message.toLowerCase().includes('attribute') && fixedIssue.message.toLowerCase().includes('not allowed')) {
+                // For xsi:type issues, mark similar issues in the OPF file as fixed
+                const sameFileXsiTypeIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    issue.code === fixedIssue.code &&
+                    issue.location?.file === fixedIssue.location?.file &&
+                    (issue.message.toLowerCase().includes('xsi:type') || 
+                     (issue.message.toLowerCase().includes('attribute') && issue.message.toLowerCase().includes('not allowed')))
+                );
+
+                sameFileXsiTypeIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked xsi:type validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                });
+            }
+            // For other RSC-005 issues that were successfully fixed, mark exact same issues as fixed
+            else {
+                const sameIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    issue.code === fixedIssue.code &&
+                    issue.message === fixedIssue.message
+                );
+
+                sameIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked identical validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                });
+            }
         }
         // DO NOT mark metadata accessibility issues as similar - each needs individual processing
         // EXCEPT if this is a comprehensive metadata fix, then mark all related metadata issues as fixed

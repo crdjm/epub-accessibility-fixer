@@ -319,7 +319,14 @@ export class EpubParser {
         // Add all other files
         for (const [filePath, content] of context.contents) {
             if (filePath !== 'mimetype') {
-                zip.file(filePath, content.content);
+                // Handle binary vs text content properly
+                if (content.content instanceof Buffer) {
+                    // For binary files, add buffer directly
+                    zip.file(filePath, content.content);
+                } else {
+                    // For text files, add as string
+                    zip.file(filePath, content.content);
+                }
             }
         }
 

@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import chalk from 'chalk';
 import ora from 'ora';
+import * as dotenv from 'dotenv';
 
 import { EpubAccessibilityProcessor } from './core/epub-processor';
 import { Logger, isValidEpubPath, formatFileSize } from './utils/common';
@@ -12,6 +13,9 @@ import { loadConfig } from './core/config';
 import { CliOptions } from './types';
 import { EpubVersionDetector } from './utils/epub-version-detector';
 import { Epub2To3Converter } from './core/epub2-to-3-converter';
+
+// Load environment variables from .env file
+dotenv.config();
 
 const program = new Command();
 
@@ -231,7 +235,8 @@ program
                 skipAccessibility: options.skipAccessibility || false,
                 dryRun: options.dryRun || false,
                 keepOutput: options.keepOutput || false,
-                verify: options.verify || false
+                verify: options.verify || false,
+                useGemini: options.useGemini || false
             };
 
             // Initialize logger

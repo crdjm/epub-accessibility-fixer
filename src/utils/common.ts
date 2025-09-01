@@ -10,6 +10,10 @@ export class Logger {
         this.verbose = verbose;
     }
 
+    isVerbose(): boolean {
+        return this.verbose;
+    }
+
     info(message: string): void {
         const logMessage = `[INFO] ${new Date().toISOString()} - ${message}`;
         this.logs.push(logMessage);

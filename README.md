@@ -405,10 +405,18 @@ To use local AI models:
 To use Google's Gemini AI models instead of local AI:
 
 1. Get a [Google AI API key](https://aistudio.google.com/)
-2. Set the API key as an environment variable:
+
+2. Set the API key either as an environment variable:
    ```bash
    export GEMINI_API_KEY=your_api_key_here
    ```
+   
+   Or create a `.env` file in your project directory with your API key:
+   ```bash
+   # Create .env file
+   echo "GEMINI_API_KEY=your_api_key_here" > .env
+   ```
+
 3. Run the tool with the `--use-gemini` flag:
    ```bash
    epub-fix book.epub --use-gemini
