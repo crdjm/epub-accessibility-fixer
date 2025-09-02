@@ -324,7 +324,11 @@ export class AccessibilityAnalyzer {
             'epub-lang',                   // EPUB language attribute
             'metadata-accessmode',         // Accessibility metadata
             'metadata-accessmodesufficient', // Accessibility metadata
-            'link-in-text-block'          // Link color contrast
+            'link-in-text-block',          // Link color contrast
+            'epub-type-has-matching-role', // EPUB type to ARIA role mapping
+            'non-linear-content',          // Non-linear content reachability
+            'landmark-unique',             // Landmark must have unique accessible name
+            'OPF-096'                      // Non-linear content reachability (EPUB validation code)
         ];
 
         const ruleId = assertion['earl:test']?.['dct:title'] || assertion['earl:test']?.title || '';
@@ -333,8 +337,10 @@ export class AccessibilityAnalyzer {
         // Also check message content for specific patterns
         const message = assertion['earl:result']?.['dct:description'] || assertion.description || assertion.message || '';
         const isFixableByMessage = this.isAccessibilityFixableByMessage(message);
-
-        return isFixableByCode || isFixableByMessage;
+        
+        const isFixable = isFixableByCode || isFixableByMessage;
+        this.logger.info(`Accessibility assertion with ruleId="${ruleId}" and message="${message}" is fixable: ${isFixable} (byCode: ${isFixableByCode}, byMessage: ${isFixableByMessage})`);
+        return isFixable;
     }
 
     // Check if an issue is fixable based on its message content (for cases where DAISY ACE provides detailed messages)
@@ -346,20 +352,34 @@ export class AccessibilityAnalyzer {
             'Element has no title attribute',
             'The element does not have a lang attribute',
             'does not have a lang attribute',
-            'missing lang attribute'
+            'missing lang attribute',
+            'html element missing language attribute',
+            'html> element must have a lang attribute',  // DAISY ACE specific message
+            'Element has no ARIA role matching its epub:type',
+            'Non-linear content must be reachable',
+            'Landmarks should have a unique role or role/label/title',  // landmark-unique message
+            'The landmark must have a unique aria-label, aria-labelledby, or title'  // landmark-unique message
         ];
 
-        return fixableMessagePatterns.some(pattern =>
+        const isFixable = fixableMessagePatterns.some(pattern =>
             message.toLowerCase().includes(pattern.toLowerCase())
         );
+        
+        this.logger.info(`Accessibility message "${message}" is fixable: ${isFixable}`);
+        return isFixable;
     }
 
     async addAccessibilityToContext(context: ProcessingContext): Promise<void> {
         try {
+            this.logger.info('Starting addAccessibilityToContext');
             const keepOutput = context.options?.keepOutput || false;
             const result = await this.analyzeAccessibility(context.epubPath, keepOutput);
+            this.logger.info(`DAISY ACE found ${result.issues.length} issues`);
+            result.issues.forEach((issue, index) => {
+                this.logger.info(`DAISY ACE issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}`);
+            });
             context.issues.push(...result.issues);
-            this.logger.info(`Added ${result.issues.length} accessibility issues to context`);
+            this.logger.info(`Added ${result.issues.length} accessibility issues to context. Total context issues: ${context.issues.length}`);
         } catch (error) {
             this.logger.error(`Failed to add accessibility analysis to context: ${error}`);
             // Don't throw - continue processing even if accessibility analysis fails

@@ -1025,16 +1025,18 @@ except Exception as e:
             this.logger.info(`Image format: ${ext} -> ${mimeType}`);
 
             // Create a prompt optimized for vision models
-            const prompt = `Create alt text for this EPUB image that will help screen reader users understand the visual content.
+            const prompt = "Please analyze the content of this image carefully and generate a clear, concise, and vivid alt text description suitable for accessibility screen readers. Do not include any preamble text in your response. Just give the description. Include relevant details such as objects, people, settings, actions, colors, emotions, and context conveyed by the image. Avoid ambiguous terms and focus on providing an informative, respectful, and helpful description that a visually impaired person would appreciate to fully understand the image content."
 
-Focus on:
-- Character names and their actions/expressions  
-- Important visual elements for the story
-- Setting details that matter to understanding
+            //             const prompt = `Create alt text for this EPUB image that will help screen reader users understand the visual content.
 
-Avoid starting with "image of" or "picture of". Be descriptive but concise.
+            // Focus on:
+            // - Character names and their actions/expressions  
+            // - Important visual elements for the story
+            // - Setting details that matter to understanding
 
-Final alt text:`;
+            // Avoid starting with "image of" or "picture of". Be descriptive but concise.
+
+            // Final alt text:`;
 
             this.logger.info(`Sending image analysis request to vision model: ${modelName}...`);
 

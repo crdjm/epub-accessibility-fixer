@@ -11,6 +11,9 @@ import { LinkAccessibilityFixer } from '../fixers/link-accessibility-fixer';
 import { InteractiveElementFixer } from '../fixers/interactive-element-fixer';
 import { ResourceReferenceFixer } from '../fixers/resource-reference-fixer';
 import { ValidationStructureFixer } from '../fixers/validation-structure-fixer';
+import { EpubTypeRoleFixer } from '../fixers/epub-type-role-fixer';
+import { NonLinearContentFixer } from '../fixers/non-linear-content-fixer';
+import { LandmarkUniqueFixer } from '../fixers/landmark-unique-fixer';
 
 export class FixerOrchestrator {
     private logger: Logger;
@@ -33,10 +36,16 @@ export class FixerOrchestrator {
             new LinkAccessibilityFixer(this.logger), // Fix link accessibility issues
             new InteractiveElementFixer(this.logger), // Fix interactive element accessibility
             new ResourceReferenceFixer(this.logger), // Fix remote/missing resource references
+            new EpubTypeRoleFixer(this.logger),      // Fix epub:type to ARIA role mappings
+            new NonLinearContentFixer(this.logger),  // Fix non-linear content reachability
+            new LandmarkUniqueFixer(this.logger),    // Fix landmark uniqueness issues
             // Add more fixers here as they're implemented
         ];
 
         this.logger.info(`Initialized ${this.fixers.length} fixers`);
+        this.fixers.forEach((fixer, index) => {
+            this.logger.info(`Fixer ${index + 1}: ${fixer.getFixerName()}`);
+        });
     }
 
     async fixAllIssues(context: ProcessingContext): Promise<FixResult[]> {
@@ -46,11 +55,25 @@ export class FixerOrchestrator {
         const fixableIssues = context.issues.filter(issue => issue.fixable && !issue.fixed);
 
         this.logger.info(`Found ${fixableIssues.length} fixable issues`);
+        
+        // Log all fixable issues for debugging
+        fixableIssues.forEach((issue, index) => {
+            this.logger.info(`Fixable issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}, fixed=${issue.fixed}, severity=${issue.severity}`);
+        });
+        
+        // Log all issues for debugging
+        context.issues.forEach((issue, index) => {
+            this.logger.info(`All issues ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}, fixed=${issue.fixed}, severity=${issue.severity}`);
+        });
 
+        this.logger.info(`Processing ${fixableIssues.length} fixable issues...`);
+        let processedCount = 0;
         for (const issue of fixableIssues) {
+            processedCount++;
+            this.logger.info(`Processing issue ${processedCount}/${fixableIssues.length}: code="${issue.code}", message="${issue.message}", fixed=${issue.fixed}`);
             // Skip if already marked as fixed by duplicate detection
             if (issue.fixed) {
-                this.logger.info(`Skipping already fixed issue: ${issue.code}`);
+                this.logger.info(`Skipping already fixed issue: ${issue.code} - ${issue.message}`);
                 continue;
             }
 
@@ -85,10 +108,12 @@ export class FixerOrchestrator {
     }
 
     async fixIssue(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        this.logger.info(`Attempting to fix issue: code="${issue.code}", message="${issue.message}"`);
         // Find appropriate fixer for this issue
         const fixer = this.findFixerForIssue(issue);
 
         if (!fixer) {
+            this.logger.info(`No fixer found for issue: ${issue.code}`);
             return {
                 success: false,
                 message: `No fixer available for issue: ${issue.code}`,
@@ -119,26 +144,28 @@ export class FixerOrchestrator {
     }
 
     private markSimilarIssuesFixed(fixedIssue: ValidationIssue, context: ProcessingContext): void {
+        this.logger.info(`Marking similar issues as fixed for issue: code="${fixedIssue.code}", message="${fixedIssue.message}"`);
         // Mark similar issues as fixed to avoid duplicate processing
         const fixerForThisIssue = this.findFixerForIssue(fixedIssue);
         if (!fixerForThisIssue) return;
 
-        // For language-related fixes, mark all language issues as fixed since they're typically global
+        // For language-related fixes, we should NOT mark all language issues as fixed since they're typically per-file
+        // Each file needs to be processed individually
         if (fixedIssue.code.includes('html-has-lang') ||
             fixedIssue.code.includes('missing-lang') ||
             (fixedIssue.code.includes('RSC-005') && fixedIssue.message.toLowerCase().includes('language')) ||
-            fixedIssue.code.includes('epub-lang')) {
-            const languageIssues = context.issues.filter(issue =>
+            fixedIssue.code.includes('epub-lang') ||
+            fixedIssue.message.includes('lang attribute')) {
+            // Only mark identical issues in the same file as fixed
+            const sameFileLanguageIssues = context.issues.filter(issue =>
                 !issue.fixed &&
-                (issue.code.includes('html-has-lang') ||
-                    issue.code.includes('missing-lang') ||
-                    (issue.code.includes('RSC-005') && issue.message.toLowerCase().includes('language')) ||
-                    issue.code.includes('epub-lang'))
+                issue.code === fixedIssue.code &&
+                issue.location?.file === fixedIssue.location?.file
             );
 
-            languageIssues.forEach(issue => {
+            sameFileLanguageIssues.forEach(issue => {
                 issue.fixed = true;
-                this.logger.info(`Marked similar language issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                this.logger.info(`Marked identical language issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
             });
         }
         // For validation structure issues, be more careful about marking RSC-005 issues as fixed
@@ -206,20 +233,35 @@ export class FixerOrchestrator {
                 });
             }
         }
-        // DO NOT mark metadata accessibility issues as similar - each needs individual processing
-        // EXCEPT if this is a comprehensive metadata fix, then mark all related metadata issues as fixed
-        else if (fixedIssue.code.includes('metadata-') &&
+        // For metadata accessibility issues, mark all related metadata issues as fixed
+        // since MetadataFixer handles them comprehensively
+        else if ((fixedIssue.code.includes('metadata-') || fixedIssue.code.includes('accessibility')) &&
             fixerForThisIssue.getFixerName() === 'Metadata Fixer') {
             // Mark all metadata accessibility issues in the same file as fixed since MetadataFixer handles them comprehensively
             const metadataIssues = context.issues.filter(issue =>
                 !issue.fixed &&
-                issue.code.includes('metadata-') &&
+                (issue.code.includes('metadata-') || issue.code.includes('accessibility')) &&
                 issue.location?.file === fixedIssue.location?.file
             );
 
             metadataIssues.forEach(issue => {
                 issue.fixed = true;
                 this.logger.info(`Marked comprehensive metadata issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+            });
+        }
+        // Special handling for OPF-096 (non-linear content reachability) issues
+        // These issues are related to different non-linear content items but are all fixed by the same process
+        else if (fixedIssue.code === 'OPF-096' && 
+                 fixerForThisIssue.getFixerName() === 'Non-Linear Content Fixer') {
+            // Mark all OPF-096 issues as fixed since the NonLinearContentFixer addresses all non-linear content items at once
+            const allOpf096Issues = context.issues.filter(issue =>
+                !issue.fixed &&
+                issue.code === 'OPF-096'
+            );
+
+            allOpf096Issues.forEach(issue => {
+                issue.fixed = true;
+                this.logger.info(`Marked OPF-096 issue as fixed: ${issue.message}`);
             });
         }
         else {
@@ -240,11 +282,15 @@ export class FixerOrchestrator {
     }
 
     private findFixerForIssue(issue: ValidationIssue): BaseFixer | null {
+        this.logger.info(`Finding fixer for issue: code="${issue.code}", message="${issue.message}"`);
         for (const fixer of this.fixers) {
+            this.logger.info(`Checking fixer ${fixer.getFixerName()} for issue: ${issue.code} - ${issue.message}`);
             if (fixer.canFix(issue)) {
+                this.logger.info(`Found fixer ${fixer.getFixerName()} for issue: ${issue.code} - ${issue.message}`);
                 return fixer;
             }
         }
+        this.logger.info(`No fixer found for issue: ${issue.code} - ${issue.message}`);
         return null;
     }
 

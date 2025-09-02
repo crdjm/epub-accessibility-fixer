@@ -129,6 +129,7 @@ export class ValidationRunner {
         let errorCount = 0;
 
         if (jsonResult.messages) {
+            this.logger.info(`Parsing ${jsonResult.messages.length} EpubCheck messages`);
             for (const message of jsonResult.messages) {
                 const severity = this.mapSeverity(message.severity);
                 const issue: ValidationIssue = {
@@ -147,6 +148,8 @@ export class ValidationRunner {
                     details: message.suggestion
                 };
 
+                this.logger.info(`Parsed EpubCheck issue: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}`);
+                
                 issues.push(issue);
 
                 if (issue.type === 'error') {
@@ -173,6 +176,8 @@ export class ValidationRunner {
         let warningCount = 0;
         let errorCount = 0;
 
+        this.logger.info(`Parsing EpubCheck text output with ${lines.length} lines`);
+        
         for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
@@ -198,6 +203,8 @@ export class ValidationRunner {
                     fixable: this.isFixable(code)
                 };
 
+                this.logger.info(`Parsed EpubCheck text issue: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}`);
+                
                 issues.push(issue);
 
                 if (issue.type === 'error') {
@@ -252,6 +259,7 @@ export class ValidationRunner {
             'OPF-004', // Invalid metadata
             'OPF-025', // Missing language
             'OPF-026', // Invalid language
+            'OPF-096', // Non-linear content reachability
             'HTM-009', // Missing title
             'HTM-011', // Missing lang attribute
             'HTM-014', // Invalid heading structure
@@ -270,7 +278,9 @@ export class ValidationRunner {
             'ACC-005'  // Missing landmarks
         ];
 
-        return fixableCodes.includes(code);
+        const isFixable = fixableCodes.includes(code);
+        this.logger.info(`EpubCheck code ${code} is fixable: ${isFixable}`);
+        return isFixable;
     }
 
     async addValidationToContext(context: ProcessingContext): Promise<void> {
@@ -280,10 +290,15 @@ export class ValidationRunner {
                 return;
             }
 
+            this.logger.info('Starting addValidationToContext');
             const keepOutput = context.options?.keepOutput || false;
             const result = await this.validateEpub(context.epubPath, keepOutput);
+            this.logger.info(`EpubCheck found ${result.issues.length} issues`);
+            result.issues.forEach((issue, index) => {
+                this.logger.info(`EpubCheck issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}`);
+            });
             context.issues.push(...result.issues);
-            this.logger.info(`Added ${result.issues.length} validation issues to context`);
+            this.logger.info(`Added ${result.issues.length} validation issues to context. Total context issues: ${context.issues.length}`);
         } catch (error) {
             this.logger.error(`Failed to add validation to context: ${error}`);
             // Don't throw - continue processing even if validation fails

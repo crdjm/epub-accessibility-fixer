@@ -35,10 +35,13 @@ export abstract class BaseFixer {
             throw new Error(`Cannot save binary file as document: ${content.path}`);
         }
 
-        // For XML documents like OPF, use proper XML serialization
-        // Check if this is an XML document
-        if (content.mediaType === 'application/oebps-package+xml' || content.path.endsWith('.opf')) {
-            // For OPF files, we need to preserve XML structure and self-closing tags
+        // For XML documents like OPF and XHTML, use proper XML serialization
+        // Check if this is an XML document (EPUB XHTML files are XML)
+        if (content.mediaType === 'application/oebps-package+xml' || 
+            content.path.endsWith('.opf') || 
+            content.mediaType === 'application/xhtml+xml' || 
+            content.path.endsWith('.xhtml')) {
+            // For XML/XHTML files, we need to preserve XML structure and self-closing tags
             // Use XML mode to properly serialize
             content.content = $.xml();
             // Ensure proper XML declaration if missing

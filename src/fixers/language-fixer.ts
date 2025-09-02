@@ -40,7 +40,8 @@ export class LanguageAttributeFixer extends BaseFixer {
             'The element does not have a lang attribute',
             'does not have a lang attribute',
             'missing lang attribute',
-            'html element missing language attribute'
+            'html element missing language attribute',
+            'html> element must have a lang attribute'  // DAISY ACE specific message
         ];
 
         return messagePatterns.some(pattern =>
@@ -91,6 +92,7 @@ export class LanguageAttributeFixer extends BaseFixer {
                         if (fixed > 0) {
                             changedFiles.push(content.path);
                             totalFixed += fixed;
+                            this.logger.info(`Successfully fixed language attributes in ${content.path}`);
                         } else {
                             // Check if already has language - this is common for subsequent calls
                             const $ = this.loadDocument(content);
@@ -98,12 +100,16 @@ export class LanguageAttributeFixer extends BaseFixer {
                             const existingLang = $html.attr('lang') || $html.attr('xml:lang');
                             if (existingLang) {
                                 this.logger.info(`Language attribute already present in ${content.path}: ${existingLang}`);
+                                // Still add to changed files to ensure proper tracking
+                                changedFiles.push(content.path);
                                 return this.createFixResult(
                                     true,
                                     `Language attribute already present: ${existingLang}`,
-                                    [],
+                                    changedFiles, // Include the file in changed files even if already fixed
                                     { language: existingLang, alreadyFixed: true }
                                 );
+                            } else {
+                                this.logger.warn(`No language attributes were added to ${content.path} and none were found`);
                             }
                         }
                     } else {
@@ -123,6 +129,7 @@ export class LanguageAttributeFixer extends BaseFixer {
                         this.logger.info(`  ... and ${fileCount - 10} more files`);
                     }
                     this.logger.info(`Total files in context: ${fileCount}`);
+                    return this.createFixResult(false, `Could not find content for file: ${issue.location.file}`);
                 }
             } else {
                 // Fix all content files
@@ -145,7 +152,7 @@ export class LanguageAttributeFixer extends BaseFixer {
                 totalFixed++;
             }
 
-            if (totalFixed > 0) {
+            if (totalFixed > 0 || changedFiles.length > 0) {
                 return this.createFixResult(
                     true,
                     `Added language attributes (${language}) to ${totalFixed} locations`,
@@ -253,6 +260,7 @@ export class LanguageAttributeFixer extends BaseFixer {
 
         this.logger.info(`Checking language attributes in file: ${content.path}`);
         this.logger.info(`Target language: ${language}`);
+        this.logger.info(`Content media type: ${content.mediaType}`);
 
         // Debug: Show first part of document structure
         const htmlElement = $('html').get(0);
@@ -283,8 +291,16 @@ export class LanguageAttributeFixer extends BaseFixer {
                 const verifyLang = $html.attr('lang');
                 const verifyXmlLang = $html.attr('xml:lang');
                 this.logger.info(`Verification - lang: ${verifyLang}, xml:lang: ${verifyXmlLang}`);
+                
+                // Save the document
+                this.logger.info(`Saving document with language attributes...`);
+                this.saveDocument($, content);
+                this.logger.info(`✓ Document saved successfully`);
             } else {
                 this.logger.info(`HTML element already has language attributes, skipping`);
+                // Even if already fixed, we should still save to ensure the content is properly updated
+                this.saveDocument($, content);
+                this.logger.info(`✓ Document saved to ensure consistency`);
             }
         } else {
             this.logger.warn(`No HTML element found in ${content.path}`);
@@ -313,6 +329,13 @@ export class LanguageAttributeFixer extends BaseFixer {
                 $body.attr('lang', language);
                 fixedCount++;
                 this.logger.info(`✓ Added language attribute to body element: ${language}`);
+                
+                // Save the document if we haven't already
+                if (fixedCount > 1) { // We already saved above if we fixed the html element
+                    this.logger.info(`Saving document with body language attribute...`);
+                    this.saveDocument($, content);
+                    this.logger.info(`✓ Document saved successfully`);
+                }
             }
         }
 
@@ -362,9 +385,7 @@ export class LanguageAttributeFixer extends BaseFixer {
         this.logger.info(`Total fixes applied in ${content.path}: ${fixedCount}`);
 
         if (fixedCount > 0) {
-            this.logger.info(`Saving document with ${fixedCount} language attribute fixes...`);
-            this.saveDocument($, content);
-            this.logger.info(`✓ Document saved successfully`);
+            this.logger.info(`Document has been modified with ${fixedCount} language attribute fixes`);
         } else {
             this.logger.warn(`No language attributes were added to ${content.path}`);
         }
@@ -440,6 +461,14 @@ export class LanguageAttributeFixer extends BaseFixer {
             existingLang.text(language);
             fixed = true;
             this.logger.info(`Updated empty language metadata in OPF: ${language}`);
+        } else {
+            // Check if the existing language is different from what we want to set
+            const currentLang = existingLang.text().trim();
+            if (currentLang !== language) {
+                existingLang.text(language);
+                fixed = true;
+                this.logger.info(`Updated language metadata in OPF from ${currentLang} to ${language}`);
+            }
         }
 
         if (fixed) {
