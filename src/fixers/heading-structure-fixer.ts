@@ -16,11 +16,45 @@ export class HeadingStructureFixer extends BaseFixer {
     }
 
     getHandledCodes(): string[] {
-        return ['heading-structure', 'heading-order', 'page-has-heading-one', 'ACC-003'];
+        return ['heading-structure', 'heading-order', 'page-has-heading-one', 'ACC-003', 'empty-heading'];
     }
 
     canFix(issue: ValidationIssue): boolean {
-        return this.getHandledCodes().some(code => issue.code.includes(code));
+        const handledCodes = this.getHandledCodes();
+        const codesMatch = handledCodes.some(code => 
+            issue.code.includes(code) || 
+            code.includes(issue.code) ||
+            issue.message.includes(code)
+        );
+        
+        if (codesMatch) {
+            this.logger.info(`HeadingStructureFixer can fix issue with code match: ${issue.code}`);
+            return true;
+        }
+        
+        // Also check if the message contains the specific text patterns we handle
+        const messagePatterns = [
+            'Element does not have text that is visible to screen readers',
+            'aria-label attribute does not exist or is empty',
+            'aria-labelledby attribute does not exist',
+            'Element has no title attribute'
+        ];
+        
+        // Only handle these patterns if the issue is actually related to headings
+        const isHeadingIssue = issue.message.includes('heading') ||
+                              issue.code.includes('heading') ||
+                              (issue as any).element?.match(/^h[1-6]$/) ||
+                              issue.location?.file?.includes('heading');
+        
+        const matchesPattern = messagePatterns.some(pattern => issue.message.includes(pattern));
+        
+        if (isHeadingIssue && matchesPattern) {
+            this.logger.info(`HeadingStructureFixer can fix heading issue with pattern match: ${issue.message.substring(0, 100)}...`);
+            return true;
+        }
+        
+        this.logger.info(`HeadingStructureFixer cannot fix issue: ${issue.code} - ${issue.message.substring(0, 100)}...`);
+        return false;
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
@@ -90,12 +124,23 @@ export class HeadingStructureFixer extends BaseFixer {
             return 0;
         }
 
+        // Fix empty headings
+        for (const heading of headings) {
+            if (!heading.text) {
+                const $heading = $(heading.element);
+                const fixed = this.fixEmptyHeading($heading, $, content.path);
+                if (fixed) {
+                    fixedCount++;
+                }
+            }
+        }
+
         // Check if first heading should be h1
         const hasH1 = headings.some(h => h.level === 1);
         if (!hasH1 && headings.length > 0) {
             // Promote the first heading to h1
             const firstHeading = headings[0];
-            if (firstHeading.level > 1) {
+            if (firstHeading.level > 1 && firstHeading.text) { // Only promote if it has text
                 $(firstHeading.element).replaceWith($(`<h1>${firstHeading.text}</h1>`));
                 fixedCount++;
                 this.logger.info(`Promoted first heading to h1: "${firstHeading.text}"`);
@@ -108,7 +153,7 @@ export class HeadingStructureFixer extends BaseFixer {
             const previous = headings[i - 1];
 
             // If current heading level is more than 1 level deeper than previous
-            if (current.level > previous.level + 1) {
+            if (current.level > previous.level + 1 && current.text) { // Only fix if it has text
                 const newLevel = previous.level + 1;
                 const $current = $(current.element);
                 const newTag = `h${newLevel}`;
@@ -128,6 +173,132 @@ export class HeadingStructureFixer extends BaseFixer {
         }
 
         return fixedCount;
+    }
+
+    private fixEmptyHeading($heading: Cheerio, $: CheerioStatic, filePath: string): boolean {
+        const tagName = $heading.prop('tagName')?.toLowerCase();
+        const className = $heading.attr('class') || '';
+        const id = $heading.attr('id') || '';
+        
+        this.logger.info(`Found empty heading: ${tagName} with class="${className}" id="${id}" in ${filePath}`);
+
+        // Strategy 1: Try to generate meaningful text from context
+        const generatedText = this.generateHeadingTextFromContext($heading, $, className, id);
+        if (generatedText) {
+            $heading.text(generatedText);
+            this.logger.info(`Added generated text to empty heading: "${generatedText}"`);
+            return true;
+        }
+
+        // Strategy 2: Add aria-label if we can generate meaningful text
+        const ariaLabelText = this.generateAriaLabelText(className, id);
+        if (ariaLabelText) {
+            $heading.attr('aria-label', ariaLabelText);
+            $heading.attr('role', 'heading');
+            $heading.attr('aria-level', tagName?.charAt(1) || '1');
+            this.logger.info(`Added aria-label to empty heading: "${ariaLabelText}"`);
+            return true;
+        }
+
+        // Strategy 3: Remove the empty heading if it serves no purpose
+        // Only remove if it doesn't have important attributes
+        const hasImportantAttributes = $heading.attr('id') || $heading.attr('epub:type') || $heading.attr('role');
+        if (!hasImportantAttributes) {
+            $heading.remove();
+            this.logger.info(`Removed empty heading with no purpose`);
+            return true;
+        }
+
+        // Strategy 4: If it has important attributes, hide it from screen readers but keep it in the DOM
+        // Only apply this fix if it doesn't already have aria-hidden
+        if (!$heading.attr('aria-hidden')) {
+            $heading.attr('aria-hidden', 'true');
+            this.logger.info(`Hid empty heading from screen readers but kept in DOM`);
+            return true;
+        }
+
+        // No fix could be applied
+        this.logger.info(`Could not apply any fix to empty heading`);
+        return false;
+    }
+
+    private generateHeadingTextFromContext($heading: Cheerio, $: CheerioStatic, className: string, id: string): string | null {
+        // Try to generate text based on class or id
+        if (className) {
+            // Clean up class name to make it readable
+            const cleaned = className
+                .replace(/[-_]/g, ' ')
+                .replace(/\b(h\d|heading|title|chapter|section|part)\b/gi, '')
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            if (cleaned && cleaned.length > 0) {
+                // Capitalize first letter
+                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            }
+        }
+
+        if (id) {
+            // Clean up id to make it readable
+            const cleaned = id
+                .replace(/[-_]/g, ' ')
+                .replace(/\b(h\d|heading|title|chapter|section|part)\b/gi, '')
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            if (cleaned && cleaned.length > 0) {
+                // Capitalize first letter
+                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            }
+        }
+
+        // Look for nearby text content that might be related
+        const parent = $heading.parent();
+        if (parent.length > 0) {
+            // Check siblings for text
+            const siblings = parent.contents().filter((_, node) => node.nodeType === 3); // Text nodes
+            for (let i = 0; i < siblings.length; i++) {
+                const text = $(siblings[i]).text().trim();
+                if (text && text.length > 0 && text.length < 50) {
+                    return text;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private generateAriaLabelText(className: string, id: string): string | null {
+        // Generate aria-label text from class or id
+        if (className) {
+            // Clean up class name to make it readable
+            const cleaned = className
+                .replace(/[-_]/g, ' ')
+                .replace(/\b(h\d|heading|title|chapter|section|part)\b/gi, '')
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            if (cleaned && cleaned.length > 0) {
+                // Capitalize first letter
+                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            }
+        }
+
+        if (id) {
+            // Clean up id to make it readable
+            const cleaned = id
+                .replace(/[-_]/g, ' ')
+                .replace(/\b(h\d|heading|title|chapter|section|part)\b/gi, '')
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            if (cleaned && cleaned.length > 0) {
+                // Capitalize first letter
+                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            }
+        }
+
+        return null;
     }
 
     private fixHeadingNesting($: CheerioStatic, headings: Array<{ element: CheerioElement; level: number; text: string }>): void {

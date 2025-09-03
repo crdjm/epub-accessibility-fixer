@@ -16,13 +16,16 @@ export class ValidationStructureFixer extends BaseFixer {
     getHandledCodes(): string[] {
         return [
             'RSC-005', // Specific structural validation errors
+            // 'RSC-006', // Remote resource references (handled by ResourceReferenceFixer)
+            'OPF-014', // Missing remote-resources property
             'dcterms:modified',
             'dc:date',
             'spine element toc attribute',
             'http-equiv',
             'role attribute',
             'toc attribute must be set',
-            'xsi:type'
+            'xsi:type',
+            'opf:role' // Add opf:role attribute handling
         ];
     }
 
@@ -49,7 +52,18 @@ export class ValidationStructureFixer extends BaseFixer {
             'value of attribute "role" is invalid',
             // Additional patterns for RSC-005 errors
             'rsc-005',
-            'http-equiv'
+            'http-equiv',
+            'role',
+            'xsi:type',
+            'epub:type',
+            'namespace',
+            'doctype',
+            'mimetype',
+            'compression',
+            'ncx',
+            'opf:role', // Handle opf:role issues
+            'remote resource', // Handle remote resource issues
+            'remote-resources' // Handle remote-resources property issues
         ];
 
         const canFix = fixableMessages.some(pattern => issueMessageLower.includes(pattern.toLowerCase()));
@@ -97,7 +111,9 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
                 }
-            } else if (issue.message.includes('value of attribute "http-equiv" is invalid')) {
+            } else if (issue.message.includes('value of attribute "http-equiv" is invalid') ||
+                       issue.message.includes('http-equiv=\'content-type\' must have the value "text/html; charset=utf-8"') ||
+                       issue.message.includes('meta element in encoding declaration state (http-equiv=\'content-type\') must have the value "text/html; charset=utf-8"')) {
                 this.logger.info(`Handling http-equiv issue`);
                 const result = await this.fixInvalidHttpEquiv(issue, context);
                 if (result.success) {
@@ -116,6 +132,32 @@ export class ValidationStructureFixer extends BaseFixer {
             } else if (issue.message.includes('attribute "xsi:type" not allowed')) {
                 this.logger.info(`Handling xsi:type attribute issue`);
                 const result = await this.fixXsiTypeAttribute(context);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                }
+            } else if (issue.message.includes('attribute "opf:role" not allowed')) {
+                this.logger.info(`Handling opf:role attribute issue`);
+                const result = await this.fixOpfRoleAttribute(context);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                }
+            } else if (issue.message.includes('remote resource reference is not allowed') ||
+                       issue.code === 'RSC-006') {
+                this.logger.info(`Handling remote resource reference issue`);
+                const result = await this.fixRemoteResourceReferences(issue, context);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                }
+            } else if (issue.message.includes('property "remote-resources" should be declared') ||
+                       issue.code === 'OPF-014') {
+                this.logger.info(`Handling remote-resources property issue`);
+                const result = await this.fixRemoteResourcesProperty(context);
                 if (result.success) {
                     fixApplied = true;
                     fixDescription = result.message;
@@ -395,8 +437,11 @@ export class ValidationStructureFixer extends BaseFixer {
                 const contentFiles = this.getAllContentFiles(context);
                 for (const content of contentFiles) {
                     // Only process files that might contain the issue
-                    if (content.path.includes('htm') || 
-                        (issue.location.file && content.path.includes(issue.location.file))) {
+                    // Process all HTML/XHTML files or specifically the file mentioned in the issue
+                    const isHtmlFile = content.path.endsWith('.html') || content.path.endsWith('.xhtml') || content.path.includes('.html') || content.path.includes('.xhtml');
+                    const isTargetFile = issue.location.file && content.path.includes(issue.location.file);
+                                
+                    if (isHtmlFile || isTargetFile) {
                         const fixed = await this.fixHttpEquivInFile(content);
                         if (fixed) {
                             changedFiles.push(content.path);
@@ -529,14 +574,18 @@ export class ValidationStructureFixer extends BaseFixer {
                     
                     // Ensure it has content attribute for certain http-equiv values
                     const contentAttr = $element.attr('content');
-                    if (!contentAttr) {
-                        // Add default content based on http-equiv value
-                        const lowerHttpEquiv = httpEquiv.toLowerCase();
-                        if (lowerHttpEquiv === 'content-type') {
+                    const lowerHttpEquiv = httpEquiv.toLowerCase();
+                    
+                    if (lowerHttpEquiv === 'content-type') {
+                        // Special handling for content-type - must be exactly "text/html; charset=utf-8"
+                        if (contentAttr !== 'text/html; charset=utf-8') {
                             $element.attr('content', 'text/html; charset=utf-8');
                             fixed = true;
-                            this.logger.info(`Added content="text/html; charset=utf-8" to meta element with http-equiv="${httpEquiv}" in ${content.path}`);
-                        } else if (lowerHttpEquiv === 'refresh') {
+                            this.logger.info(`Fixed content attribute for content-type: "${contentAttr}" -> "text/html; charset=utf-8" in ${content.path}`);
+                        }
+                    } else if (!contentAttr) {
+                        // Add default content based on http-equiv value for other types
+                        if (lowerHttpEquiv === 'refresh') {
                             // Refresh should have a value like "5; url=http://example.com"
                             // If missing, we should remove it as it's not properly configured
                             $element.remove();
@@ -735,6 +784,128 @@ export class ValidationStructureFixer extends BaseFixer {
         }
 
         return this.createFixResult(false, 'No xsi:type attributes found to fix');
+    }
+
+    /**
+     * Fix opf:role attributes in OPF file
+     */
+    private async fixOpfRoleAttribute(context: ProcessingContext): Promise<FixResult> {
+        // Find OPF file
+        let opfContent: EpubContent | null = null;
+        let opfPath: string = '';
+
+        for (const [path, content] of context.contents) {
+            if (path.endsWith('.opf') || content.mediaType === 'application/oebps-package+xml') {
+                opfContent = content;
+                opfPath = path;
+                break;
+            }
+        }
+
+        if (!opfContent) {
+            return this.createFixResult(false, 'Could not find OPF file to fix opf:role attributes');
+        }
+
+        const $ = this.loadDocument(opfContent);
+        let fixed = false;
+
+        // Remove opf:role attributes from metadata elements
+        $('metadata [opf\\:role]').each((_, element) => {
+            const $element = $(element);
+            const role = $element.attr('opf:role');
+            $element.removeAttr('opf:role');
+            fixed = true;
+            this.logger.info(`Removed opf:role="${role}" attribute from metadata element in ${opfPath}`);
+            
+            // If this is a creator or contributor element, we might want to convert to the proper EPUB 3 format
+            const tagName = $element.prop('tagName')?.toLowerCase();
+            if (tagName === 'dc:creator' || tagName === 'dc:contributor') {
+                // Add the role as a meta element with the proper EPUB 3 format
+                const metaElement = $('<meta>')
+                    .attr('refines', '#' + ($element.attr('id') || ''))
+                    .attr('property', 'role')
+                    .attr('scheme', 'marc:relators')
+                    .text(role);
+                $element.after(metaElement);
+                this.logger.info(`Added EPUB 3 role meta element for ${tagName} with role="${role}"`);
+            }
+        });
+
+        if (fixed) {
+            this.saveDocument($, opfContent);
+            return this.createFixResult(
+                true,
+                'Fixed opf:role attributes in OPF file',
+                [opfPath]
+            );
+        }
+
+        return this.createFixResult(false, 'No opf:role attributes found to fix');
+    }
+
+    /**
+     * Fix remote resource references by downloading them locally
+     */
+    private async fixRemoteResourceReferences(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        // For RSC-006 issues, we should let the ResourceReferenceFixer handle them
+        // Return false here to allow the ResourceReferenceFixer to take over
+        this.logger.info(`Delegating RSC-006 remote resource reference to ResourceReferenceFixer: ${issue.message}`);
+        
+        return this.createFixResult(
+            false,
+            'Delegating to ResourceReferenceFixer for remote resource handling'
+        );
+    }
+
+    /**
+     * Add remote-resources property to OPF manifest
+     */
+    private async fixRemoteResourcesProperty(context: ProcessingContext): Promise<FixResult> {
+        // Find OPF file
+        let opfContent: EpubContent | null = null;
+        let opfPath: string = '';
+
+        for (const [path, content] of context.contents) {
+            if (path.endsWith('.opf') || content.mediaType === 'application/oebps-package+xml') {
+                opfContent = content;
+                opfPath = path;
+                break;
+            }
+        }
+
+        if (!opfContent) {
+            return this.createFixResult(false, 'Could not find OPF file to add remote-resources property');
+        }
+
+        const $ = this.loadDocument(opfContent);
+        let fixed = false;
+
+        // Find the first item in manifest that has an HTML file
+        const firstHtmlItem = $('manifest item[media-type="application/xhtml+xml"]').first();
+        
+        if (firstHtmlItem.length > 0) {
+            // Add remote-resources property to the first HTML item
+            const currentProperties = firstHtmlItem.attr('properties') || '';
+            if (!currentProperties.includes('remote-resources')) {
+                const newProperties = currentProperties ? 
+                    `${currentProperties} remote-resources` : 
+                    'remote-resources';
+                firstHtmlItem.attr('properties', newProperties);
+                fixed = true;
+                this.logger.info(`Added remote-resources property to item in manifest in ${opfPath}`);
+            }
+        }
+
+        if (fixed) {
+            this.saveDocument($, opfContent);
+            return this.createFixResult(
+                true,
+                'Added remote-resources property to OPF manifest',
+                [opfPath]
+            );
+        }
+
+        return this.createFixResult(false, 'Could not add remote-resources property to OPF manifest');
     }
 
     /**

@@ -252,7 +252,7 @@ export class ValidationRunner {
         const fixableCodes = [
             // Real EpubCheck codes that can be fixed
             'RSC-005', // Missing language in metadata
-            'RSC-006', // Remote resource reference
+            // 'RSC-006', // Remote resource reference (not actually fixed by current implementation)
             'RSC-007', // Resource not found
             'RSC-017', // Missing title element in head
             'OPF-003', // Missing metadata

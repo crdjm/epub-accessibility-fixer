@@ -40,6 +40,7 @@ export class InteractiveElementFixer extends BaseFixer {
         );
 
         if (codesMatch) {
+            this.logger.info(`InteractiveElementFixer can fix issue with code match: ${issue.code}`);
             return true;
         }
 
@@ -51,7 +52,23 @@ export class InteractiveElementFixer extends BaseFixer {
             'Element has no title attribute'
         ];
 
-        return messagePatterns.some(pattern => issue.message.includes(pattern));
+        // Avoid handling link-specific issues that are handled by LinkAccessibilityFixer
+        const isLinkIssue = issue.message.includes('link') || 
+                           (issue as any).element === 'a' ||
+                           (issue.location?.file && issue.location.file.includes('link')) ||
+                           issue.code === 'link-name' || // DAISY ACE uses link-name for link issues
+                           issue.message.includes('Element is in tab order and does not have accessible text'); // This is also a link issue
+
+        this.logger.info(`InteractiveElementFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkIssue=${isLinkIssue}`);
+
+        // Only handle non-link issues with these message patterns
+        if (!isLinkIssue && messagePatterns.some(pattern => issue.message.includes(pattern))) {
+            this.logger.info(`InteractiveElementFixer can fix non-link issue with pattern match: ${issue.message.substring(0, 100)}...`);
+            return true;
+        }
+
+        this.logger.info(`InteractiveElementFixer cannot fix issue: ${issue.code} - ${issue.message.substring(0, 100)}...`);
+        return false;
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {

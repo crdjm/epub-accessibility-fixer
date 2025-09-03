@@ -15,7 +15,11 @@ export class EpubTypeRoleFixer extends BaseFixer {
     }
 
     getHandledCodes(): string[] {
-        return ['epub-type-has-matching-role'];
+        return [
+            'epub-type-has-matching-role',
+            'epub-type-unique', // Handle landmark uniqueness issues
+            'aria-roles' // Handle general ARIA role issues
+        ];
     }
 
     canFix(issue: ValidationIssue): boolean {
@@ -24,13 +28,15 @@ export class EpubTypeRoleFixer extends BaseFixer {
         
         // More comprehensive matching for epub:type to ARIA role issues
         const codeMatch = this.getHandledCodes().some(code => 
-            issue.code.includes(code)
+            issue.code.includes(code) || code.includes(issue.code)
         );
         
         const messageMatch = issue.message.includes('epub:type') && 
                             (issue.message.includes('ARIA role') || 
                              issue.message.includes('role matching') ||
-                             issue.message.includes('matching role'));
+                             issue.message.includes('matching role') ||
+                             issue.message.includes('landmark') ||
+                             issue.message.includes('unique'));
         
         const canFix = codeMatch || messageMatch;
         this.logger.info(`EpubTypeRoleFixer can fix issue: ${canFix ? 'yes' : 'no'} (codeMatch: ${codeMatch}, messageMatch: ${messageMatch})`);
@@ -186,6 +192,11 @@ export class EpubTypeRoleFixer extends BaseFixer {
                         $element.attr('role', 'navigation');
                         fixedCount++;
                         this.logger.info(`Added role="navigation" for epub:type="landmarks" on nav in ${content.path}`);
+                    } else {
+                        // Default to navigation for nav elements
+                        $element.attr('role', 'navigation');
+                        fixedCount++;
+                        this.logger.info(`Added default role="navigation" for nav element with epub:type="${epubType}" in ${content.path}`);
                     }
                 }
             }
@@ -213,6 +224,20 @@ export class EpubTypeRoleFixer extends BaseFixer {
                         fixedCount++;
                         this.logger.info(`Added role="${epubTypeToRoleMap[type]}" for epub:type="${type}" on ${tagName} in ${content.path}`);
                         break; // Only add one role
+                    }
+                }
+                
+                // If no mapping found, add a generic role based on element type
+                if (!types.some(type => epubTypeToRoleMap[type])) {
+                    // Add default roles for common elements
+                    if (tagName === 'section') {
+                        $element.attr('role', 'region');
+                        fixedCount++;
+                        this.logger.info(`Added default role="region" for section element with epub:type="${epubType}" in ${content.path}`);
+                    } else if (tagName === 'aside') {
+                        $element.attr('role', 'complementary');
+                        fixedCount++;
+                        this.logger.info(`Added default role="complementary" for aside element with epub:type="${epubType}" in ${content.path}`);
                     }
                 }
             }
@@ -271,35 +296,45 @@ export class EpubTypeRoleFixer extends BaseFixer {
             }
         }
 
-        // Third pass: Remove duplicate nested elements with same epub:type and role
-        // This addresses the specific issue where nested elements cause accessibility problems
-        // We disable this pass for now as it seems to be causing content duplication issues
-        // const elementsForDupCheck = $('[epub\\:type][role]').toArray();
-        // for (const element of elementsForDupCheck) {
-        //     const $element = $(element);
-        //     const epubType = $element.attr('epub:type');
-        //     const role = $element.attr('role');
-        //     
-        //     if (!epubType || !role) {
-        //         continue;
-        //     }
-        //     
-        //     // Look for direct parent elements with the same epub:type and role
-        //     const $parent = $element.parent();
-        //     if ($parent.length > 0) {
-        //         const parentEpubType = $parent.attr('epub:type');
-        //         const parentRole = $parent.attr('role');
-        //         
-        //         if (parentEpubType === epubType && parentRole === role) {
-        //             this.logger.info(`Found duplicate nested element with same epub:type="${epubType}" and role="${role}" in ${content.path}`);
-        //             // Remove the nested duplicate element, keeping only its children
-        //             const innerContent = $element.contents();
-        //             $element.replaceWith(innerContent);
-        //             fixedCount++;
-        //             this.logger.info(`Removed duplicate nested element with epub:type="${epubType}" and role="${role}" in ${content.path}`);
-        //         }
-        //     }
-        // }
+        // Third pass: Ensure landmark elements have unique accessible names
+        const landmarkElements = $('[epub\\:type][role]').filter((_, element) => {
+            const $element = $(element);
+            const role = $element.attr('role');
+            return role === 'navigation' || role === 'doc-toc' || role === 'doc-index' || role === 'doc-pagelist';
+        }).toArray();
+
+        // Group landmark elements by their epub:type and role combination
+        const landmarkGroups: { [key: string]: any[] } = {};
+        for (const element of landmarkElements) {
+            const $element = $(element);
+            const epubType = $element.attr('epub:type');
+            const role = $element.attr('role');
+            const key = `${epubType}|${role}`;
+            
+            if (!landmarkGroups[key]) {
+                landmarkGroups[key] = [];
+            }
+            landmarkGroups[key].push($element);
+        }
+
+        // For groups with multiple elements, ensure they have unique accessible names
+        for (const [key, elements] of Object.entries(landmarkGroups)) {
+            if (elements.length > 1) {
+                // Add aria-label to make them unique
+                elements.forEach(($element, index) => {
+                    const epubType = $element.attr('epub:type');
+                    const existingLabel = $element.attr('aria-label');
+                    
+                    // Only add aria-label if it doesn't already exist
+                    if (!existingLabel) {
+                        const uniqueLabel = `${epubType} ${index + 1}`;
+                        $element.attr('aria-label', uniqueLabel);
+                        fixedCount++;
+                        this.logger.info(`Added aria-label="${uniqueLabel}" to landmark element with epub:type="${epubType}" in ${content.path}`);
+                    }
+                });
+            }
+        }
 
         if (fixedCount > 0) {
             this.saveDocument($, content);

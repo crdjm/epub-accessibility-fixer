@@ -14,6 +14,8 @@ import { ValidationStructureFixer } from '../fixers/validation-structure-fixer';
 import { EpubTypeRoleFixer } from '../fixers/epub-type-role-fixer';
 import { NonLinearContentFixer } from '../fixers/non-linear-content-fixer';
 import { LandmarkUniqueFixer } from '../fixers/landmark-unique-fixer';
+import { MetadataAccessibilityFixer } from '../fixers/metadata-accessibility-fixer';
+import { LinkAccessibilityEnhancedFixer } from '../fixers/link-accessibility-enhanced-fixer'; // Add this import
 
 export class FixerOrchestrator {
     private logger: Logger;
@@ -28,12 +30,14 @@ export class FixerOrchestrator {
         this.fixers = [
             new ValidationStructureFixer(this.logger), // Fix structural validation issues first
             new MetadataFixer(this.logger),          // Fix metadata first - foundational
+            new MetadataAccessibilityFixer(this.logger), // Fix accessibility metadata
             new LanguageAttributeFixer(this.logger),  // Fix language attributes - affects other fixes
             new TitleFixer(this.logger),             // Fix document titles
             new AltTextFixer(this.logger),           // Fix alt text for images
             new HeadingStructureFixer(this.logger),  // Fix heading structure
             new ColorContrastFixer(this.logger),     // Fix color contrast issues
             new LinkAccessibilityFixer(this.logger), // Fix link accessibility issues
+            new LinkAccessibilityEnhancedFixer(this.logger), // Fix enhanced link accessibility issues
             new InteractiveElementFixer(this.logger), // Fix interactive element accessibility
             new ResourceReferenceFixer(this.logger), // Fix remote/missing resource references
             new EpubTypeRoleFixer(this.logger),      // Fix epub:type to ARIA role mappings

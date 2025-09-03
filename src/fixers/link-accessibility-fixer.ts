@@ -39,6 +39,7 @@ export class LinkAccessibilityFixer extends BaseFixer {
         );
 
         if (codesMatch) {
+            this.logger.info(`LinkAccessibilityFixer can fix issue with code match: ${issue.code}`);
             return true;
         }
 
@@ -47,16 +48,35 @@ export class LinkAccessibilityFixer extends BaseFixer {
             'Element does not have text that is visible to screen readers',
             'aria-label attribute does not exist or is empty',
             'aria-labelledby attribute does not exist',
-            'Element has no title attribute'
+            'Element has no title attribute',
+            'Element is in tab order and does not have accessible text'
         ];
 
-        // Only handle these patterns if the issue involves a link element
-        const accessibilityIssue = issue as AccessibilityIssue;
-        const isLinkRelated = accessibilityIssue.element === 'a' ||
-            issue.message.includes('link') ||
-            (issue.location?.file?.includes('link') ?? false);
+        // Check if this is a link-related issue
+        const isLinkRelated = issue.message.includes('link') ||
+            (issue as any).element === 'a' ||
+            (issue.location?.file && issue.location.file.includes('link')) ||
+            issue.code === 'link-name' || // DAISY ACE uses link-name for this issue
+            issue.message.includes('Element is in tab order and does not have accessible text'); // This is specifically a link issue
 
-        return isLinkRelated && messagePatterns.some(pattern => issue.message.includes(pattern));
+        const matchesPattern = messagePatterns.some(pattern => issue.message.includes(pattern));
+        
+        this.logger.info(`LinkAccessibilityFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkRelated=${isLinkRelated}, matchesPattern=${matchesPattern}`);
+
+        if (isLinkRelated && matchesPattern) {
+            this.logger.info(`LinkAccessibilityFixer can fix issue with pattern match: ${issue.message.substring(0, 100)}...`);
+            return true;
+        }
+
+        // Special case: Handle multi-line messages that contain the key patterns
+        if (issue.message.includes('Element is in tab order and does not have accessible text') &&
+            issue.message.includes('Element does not have text that is visible to screen readers')) {
+            this.logger.info(`LinkAccessibilityFixer can fix multi-line issue: ${issue.message.substring(0, 100)}...`);
+            return true;
+        }
+
+        this.logger.info(`LinkAccessibilityFixer cannot fix issue: ${issue.code} - ${issue.message.substring(0, 100)}...`);
+        return false;
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
@@ -70,6 +90,7 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (issue.location?.file) {
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
+                    this.logger.info(`Processing file: ${content.path}`);
                     const fixed = await this.fixLinksInFile(content, context, issue);
                     if (fixed) {
                         changedFiles.push(content.path);
@@ -81,6 +102,7 @@ export class LinkAccessibilityFixer extends BaseFixer {
                 const contentFiles = this.getAllContentFiles(context);
 
                 for (const content of contentFiles) {
+                    this.logger.info(`Processing file: ${content.path}`);
                     const fixed = await this.fixLinksInFile(content, context, issue);
                     if (fixed) {
                         changedFiles.push(content.path);
@@ -110,12 +132,14 @@ export class LinkAccessibilityFixer extends BaseFixer {
     }
 
     private async fixLinksInFile(content: EpubContent, context: ProcessingContext, issue: ValidationIssue): Promise<boolean> {
+        this.logger.info(`Fixing links in file: ${content.path}`);
         const $ = this.loadDocument(content);
         let fixesApplied = false;
 
         // Find all links that need fixing
         $('a').each((_, link) => {
             const $link = $(link);
+            this.logger.info(`Processing link with href: ${$link.attr('href') || 'no href'}`);
 
             // Fix empty or meaningless link text
             if (this.fixLinkText($link)) {
@@ -187,6 +211,19 @@ export class LinkAccessibilityFixer extends BaseFixer {
                     this.logger.info(`Added aria-label to empty link`);
                 }
             }
+        } else if (linkText && linkText.trim() === '') {
+            // Handle case where link text is only whitespace
+            const meaningfulText = this.generateLinkText(href);
+            if (meaningfulText) {
+                $link.text(meaningfulText);
+                fixed = true;
+                this.logger.info(`Replaced whitespace-only link text with: "${meaningfulText}"`);
+            } else {
+                // Add aria-label as fallback
+                $link.attr('aria-label', `Link to ${href}`);
+                fixed = true;
+                this.logger.info(`Added aria-label to whitespace-only link`);
+            }
         }
 
         // Check for generic/meaningless text
@@ -229,7 +266,58 @@ export class LinkAccessibilityFixer extends BaseFixer {
         const existingTitle = $link.attr('title');
         let fixed = false;
 
-        // Check if element has ANY accessible text
+        this.logger.info(`Checking link: href="${href}", text="${linkText}", aria-label="${existingAriaLabel || 'none'}"`);
+
+        // Special handling for links with empty alt images - moved to the beginning
+        const images = $link.find('img');
+        if (images.length > 0) {
+            let hasEmptyAltImage = false;
+            images.each((_, img) => {
+                const alt = $link.find(img).attr('alt');
+                this.logger.info(`Image alt attribute: "${alt || 'none'}"`);
+                if (!alt || alt.trim() === '') {
+                    hasEmptyAltImage = true;
+                }
+            });
+
+            if (hasEmptyAltImage) {
+                this.logger.info(`Found link with empty alt image`);
+                // Check if element has ANY accessible text
+                const hasAccessibleText = this.hasAccessibleText($link, linkText, existingAriaLabel, existingAriaLabelledBy);
+                this.logger.info(`Link has accessible text: ${hasAccessibleText}`);
+                
+                if (!hasAccessibleText) {
+                    this.logger.info(`Link has no accessible text, adding aria-label`);
+                    // Ensure the link has some form of accessible name
+                    const currentAriaLabel = $link.attr('aria-label') || '';
+                    if (!currentAriaLabel || currentAriaLabel.trim() === '') {
+                        const linkText = $link.text().trim();
+                        const href = $link.attr('href') || '';
+                        
+                        if (!linkText && href) {
+                            // Generate meaningful label from href
+                            const meaningfulLabel = this.generateLinkText(href);
+                            if (meaningfulLabel) {
+                                $link.attr('aria-label', `Image link: ${meaningfulLabel}`);
+                                fixed = true;
+                                this.logger.info(`Added aria-label for image link with empty alt: "Image link: ${meaningfulLabel}"`);
+                            } else {
+                                $link.attr('aria-label', 'Image link');
+                                fixed = true;
+                                this.logger.info(`Added generic aria-label for image link with empty alt`);
+                            }
+                        } else if (linkText) {
+                            // If there's link text, use that for the aria-label
+                            $link.attr('aria-label', linkText);
+                            fixed = true;
+                            this.logger.info(`Added aria-label based on link text: "${linkText}"`);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if element has ANY accessible text (if not already handled above)
         const hasAccessibleText = this.hasAccessibleText($link, linkText, existingAriaLabel, existingAriaLabelledBy);
 
         if (!hasAccessibleText) {
@@ -340,19 +428,23 @@ export class LinkAccessibilityFixer extends BaseFixer {
     private hasAccessibleText($element: any, visibleText: string, ariaLabel?: string, ariaLabelledBy?: string): boolean {
         // Check if element has visible text
         if (visibleText && visibleText.length > 0) {
+            this.logger.info(`Element has visible text: "${visibleText}"`);
             return true;
         }
 
         // Check if it has a valid aria-label
         if (ariaLabel && ariaLabel.trim().length > 0) {
+            this.logger.info(`Element has aria-label: "${ariaLabel}"`);
             return true;
         }
 
         // Check if aria-labelledby references valid elements with text
         if (ariaLabelledBy && this.hasValidAriaLabelledBy($element, ariaLabelledBy)) {
+            this.logger.info(`Element has valid aria-labelledby: "${ariaLabelledBy}"`);
             return true;
         }
 
+        this.logger.info(`Element has no accessible text`);
         return false;
     }
 

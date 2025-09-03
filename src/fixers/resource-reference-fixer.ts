@@ -15,7 +15,7 @@ export class ResourceReferenceFixer extends BaseFixer {
 
     getHandledCodes(): string[] {
         return [
-            'RSC-006',                    // Remote resource reference
+            // 'RSC-006',                    // Remote resource reference (not fully implemented)
             'RSC-007',                    // Resource not found
             'PKG-009',                    // Missing file in package
             'remote-resource',            // Generic remote resource issues
@@ -25,7 +25,17 @@ export class ResourceReferenceFixer extends BaseFixer {
     }
 
     canFix(issue: ValidationIssue): boolean {
-        return this.getHandledCodes().some(code => issue.code.includes(code) || code.includes(issue.code));
+        // For now, we're being conservative about what we claim we can fix
+        // RSC-006 requires downloading remote resources which is not fully implemented
+        const handledCodes = this.getHandledCodes();
+        
+        // Check if this is an RSC-006 issue, which we're not fully implementing yet
+        if (issue.code === 'RSC-006') {
+            this.logger.info('RSC-006 issues require downloading remote resources, which is not fully implemented');
+            return false;
+        }
+        
+        return handledCodes.some(code => issue.code.includes(code) || code.includes(issue.code));
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
