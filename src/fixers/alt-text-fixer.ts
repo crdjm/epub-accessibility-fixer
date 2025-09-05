@@ -41,7 +41,27 @@ export class AltTextFixer extends BaseFixer {
     }
 
     canFix(issue: ValidationIssue): boolean {
-        return this.getHandledCodes().some(code => issue.code.includes(code));
+        // Check direct code matches
+        const codeMatch = this.getHandledCodes().some(code => issue.code.includes(code));
+        
+        // Check for detailed message patterns that indicate missing alt text or accessibility attributes
+        const messagePatterns = [
+            'Element does not have an alt attribute',
+            'Element does not have text that is visible to screen readers',
+            'aria-label attribute does not exist or is empty',
+            'aria-labelledby attribute does not exist',
+            'Element has no title attribute',
+            'Element\'s default semantics were not overridden with role="none" or role="presentation"',
+            'Image missing alt attribute'
+        ];
+        
+        const messageMatch = messagePatterns.some(pattern => 
+            issue.message.includes(pattern));
+        
+        const canFix = codeMatch || messageMatch;
+        this.logger.info(`AltTextFixer can fix issue: ${canFix} (codeMatch: ${codeMatch}, messageMatch: ${messageMatch})`);
+        
+        return canFix;
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
