@@ -37,7 +37,7 @@ export class AltTextFixer extends BaseFixer {
     }
 
     getHandledCodes(): string[] {
-        return ['missing-alt-text', 'image-alt', 'ACC-002'];
+        return ['missing-alt-text', 'image-alt', 'ACC-002', 'img-alt-empty'];
     }
 
     canFix(issue: ValidationIssue): boolean {
@@ -47,12 +47,8 @@ export class AltTextFixer extends BaseFixer {
         // Check for detailed message patterns that indicate missing alt text or accessibility attributes
         const messagePatterns = [
             'Element does not have an alt attribute',
-            'Element does not have text that is visible to screen readers',
-            'aria-label attribute does not exist or is empty',
-            'aria-labelledby attribute does not exist',
-            'Element has no title attribute',
-            'Element\'s default semantics were not overridden with role="none" or role="presentation"',
-            'Image missing alt attribute'
+            'Image missing alt attribute',
+            'Element has empty alt attribute'  // Add support for empty alt attributes
         ];
         
         const messageMatch = messagePatterns.some(pattern => 
@@ -70,26 +66,41 @@ export class AltTextFixer extends BaseFixer {
         try {
             const changedFiles: string[] = [];
             let totalFixed = 0;
+            let processedSpecificFile = false;
 
-            // If issue specifies a file, fix only that file
+            // If issue specifies a file, try to fix only that file
             if (issue.location?.file) {
+                this.logger.info(`Issue specifies specific file: ${issue.location.file}`);
                 const content = this.findContentByPath(context, issue.location.file);
+                
                 if (content) {
+                    this.logger.info(`Found content for file: ${content.path}`);
                     const fixed = await this.fixAltTextInFile(content, context);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
+                        this.logger.info(`Successfully fixed ${fixed} images in ${content.path}`);
                     }
+                    processedSpecificFile = true;
+                } else {
+                    this.logger.warn(`Could not find specific file ${issue.location.file}, will process all content files instead`);
+                    // Fall back to processing all content files when specific file not found
+                    // This can happen when DAISY ACE reports incorrect file paths
                 }
-            } else {
-                // Fix all content files
+            }
+            
+            // If no specific file was specified, or if the specific file wasn't found, process all content files
+            if (!processedSpecificFile || totalFixed === 0) {
+                this.logger.info('Processing all content files for alt text issues');
                 const contentFiles = this.getAllContentFiles(context);
+                this.logger.info(`Found ${contentFiles.length} content files to check`);
 
                 for (const content of contentFiles) {
                     const fixed = await this.fixAltTextInFile(content, context);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
+                        this.logger.info(`Fixed ${fixed} images in ${content.path}`);
                     }
                 }
             }
@@ -102,6 +113,27 @@ export class AltTextFixer extends BaseFixer {
                     { imagesFixed: totalFixed }
                 );
             } else {
+                // More detailed logging for debugging
+                this.logger.warn(`No images were fixed. Issue details:`);
+                this.logger.warn(`  - Issue code: ${issue.code}`);
+                this.logger.warn(`  - Issue message: ${issue.message}`);
+                this.logger.warn(`  - Issue location: ${issue.location?.file || 'No specific file'}`);
+                
+                if (issue.location?.file) {
+                    this.logger.info(`Available files in context:`);
+                    let fileCount = 0;
+                    for (const [path] of context.contents) {
+                        fileCount++;
+                        if (fileCount <= 10) { // Show first 10 files
+                            this.logger.info(`  - ${path}`);
+                        }
+                    }
+                    if (fileCount > 10) {
+                        this.logger.info(`  ... and ${fileCount - 10} more files`);
+                    }
+                    this.logger.info(`Total files in context: ${fileCount}`);
+                }
+
                 return this.createFixResult(
                     false,
                     'No images found that needed alt text fixes'
@@ -129,8 +161,13 @@ export class AltTextFixer extends BaseFixer {
 
             this.logger.info(`Processing image: ${src}, existing alt: "${existingAlt || 'none'}"`);
 
-            // Only fix if alt attribute is missing or empty
-            if (!existingAlt || existingAlt.trim() === '') {
+            // Only fix if alt attribute is missing, undefined, or empty
+            // Handle special case where cheerio might return "undefined" as a string
+            const isMissingAlt = (!existingAlt || 
+                                 existingAlt === 'undefined' || 
+                                 existingAlt.trim() === '');
+
+            if (isMissingAlt) {
                 const src = $img.attr('src') || '';
 
                 if (this.isDecorativeImage(imgElement, $)) {

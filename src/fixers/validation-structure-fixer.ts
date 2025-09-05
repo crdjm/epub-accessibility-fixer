@@ -53,7 +53,8 @@ export class ValidationStructureFixer extends BaseFixer {
             // Additional patterns for RSC-005 errors
             'rsc-005',
             'http-equiv',
-            'role',
+            // Remove the generic 'role' pattern that was causing false positives
+            // 'role',  // This was matching image-alt issues incorrectly
             'xsi:type',
             'epub:type',
             'namespace',

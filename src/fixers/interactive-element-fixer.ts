@@ -39,7 +39,31 @@ export class InteractiveElementFixer extends BaseFixer {
             issue.message.includes(code)
         );
 
+        // Avoid handling link-specific issues that are handled by LinkAccessibilityFixer
+        const isLinkIssue = issue.message.includes('link') || 
+                           (issue as any).element === 'a' ||
+                           (issue.location?.file && issue.location.file.includes('link')) ||
+                           issue.code === 'link-name' || // DAISY ACE uses link-name for link issues
+                           issue.message.includes('Element is in tab order and does not have accessible text'); // This is also a link issue
+        
+        // Avoid handling image-specific issues that are handled by AltTextFixer
+        const isImageIssue = issue.code === 'image-alt' ||  // Direct check for image-alt code
+                            issue.message.includes('Element does not have an alt attribute') ||
+                            issue.message.includes('Image missing alt attribute') ||
+                            (issue as any).element === 'img' ||
+                            (issue.location?.file && issue.location.file.includes('img')) ||
+                            // Also check for the general "text not visible" message when it's about images
+                            (issue.message.includes('Element does not have text that is visible to screen readers') && 
+                             ((issue as any).element === 'img' || 
+                              (issue.location?.file && issue.location.file.includes('img'))));
+
         if (codesMatch) {
+            // If this is an image issue, don't handle it even if the code matches
+            if (isImageIssue) {
+                this.logger.info(`InteractiveElementFixer refusing to handle image issue with code match: ${issue.code}`);
+                return false;
+            }
+            
             this.logger.info(`InteractiveElementFixer can fix issue with code match: ${issue.code}`);
             return true;
         }
@@ -52,18 +76,11 @@ export class InteractiveElementFixer extends BaseFixer {
             'Element has no title attribute'
         ];
 
-        // Avoid handling link-specific issues that are handled by LinkAccessibilityFixer
-        const isLinkIssue = issue.message.includes('link') || 
-                           (issue as any).element === 'a' ||
-                           (issue.location?.file && issue.location.file.includes('link')) ||
-                           issue.code === 'link-name' || // DAISY ACE uses link-name for link issues
-                           issue.message.includes('Element is in tab order and does not have accessible text'); // This is also a link issue
+        this.logger.info(`InteractiveElementFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkIssue=${isLinkIssue}, isImageIssue=${isImageIssue}`);
 
-        this.logger.info(`InteractiveElementFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkIssue=${isLinkIssue}`);
-
-        // Only handle non-link issues with these message patterns
-        if (!isLinkIssue && messagePatterns.some(pattern => issue.message.includes(pattern))) {
-            this.logger.info(`InteractiveElementFixer can fix non-link issue with pattern match: ${issue.message.substring(0, 100)}...`);
+        // Only handle non-link, non-image issues with these message patterns
+        if (!isLinkIssue && !isImageIssue && messagePatterns.some(pattern => issue.message.includes(pattern))) {
+            this.logger.info(`InteractiveElementFixer can fix non-link, non-image issue with pattern match: ${issue.message.substring(0, 100)}...`);
             return true;
         }
 
