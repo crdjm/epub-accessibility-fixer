@@ -324,6 +324,9 @@ export class AccessibilityAnalyzer {
             'epub-lang',                   // EPUB language attribute
             'metadata-accessmode',         // Accessibility metadata
             'metadata-accessmodesufficient', // Accessibility metadata
+            'metadata-accessibilityfeature', // Accessibility metadata
+            'metadata-accessibilityhazard',  // Accessibility metadata
+            'metadata-accessibilitysummary', // Accessibility metadata
             'link-in-text-block',          // Link color contrast
             'epub-type-has-matching-role', // EPUB type to ARIA role mapping
             'non-linear-content',          // Non-linear content reachability
@@ -358,7 +361,11 @@ export class AccessibilityAnalyzer {
             'Element has no ARIA role matching its epub:type',
             'Non-linear content must be reachable',
             'Landmarks should have a unique role or role/label/title',  // landmark-unique message
-            'The landmark must have a unique aria-label, aria-labelledby, or title'  // landmark-unique message
+            'The landmark must have a unique aria-label, aria-labelledby, or title',  // landmark-unique message
+            'Publications must declare the',  // Metadata declaration messages
+            'schema:accessibilityFeature',
+            'schema:accessibilityHazard',
+            'schema:accessibilitySummary'
         ];
 
         const isFixable = fixableMessagePatterns.some(pattern =>
