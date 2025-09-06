@@ -208,7 +208,7 @@ export class FixerOrchestrator {
             }
             // Check if this is an xsi:type attribute issue
             else if (fixedIssue.message.toLowerCase().includes('xsi:type') || 
-                     fixedIssue.message.toLowerCase().includes('attribute') && fixedIssue.message.toLowerCase().includes('not allowed')) {
+                     (fixedIssue.message.toLowerCase().includes('attribute') && fixedIssue.message.toLowerCase().includes('not allowed'))) {
                 // For xsi:type issues, mark similar issues in the OPF file as fixed
                 const sameFileXsiTypeIssues = context.issues.filter(issue =>
                     !issue.fixed &&
@@ -223,7 +223,23 @@ export class FixerOrchestrator {
                     this.logger.info(`Marked xsi:type validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
                 });
             }
-            // For other RSC-005 issues that were successfully fixed, mark exact same issues as fixed
+            // Check if this is a page-map attribute issue
+            else if (fixedIssue.message.toLowerCase().includes('page-map')) {
+                // For page-map issues, only mark exact same issues as fixed to avoid over-marking
+                // BUT be more specific to avoid marking similar issues incorrectly
+                const samePageMapIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    issue.code === fixedIssue.code &&
+                    issue.message.toLowerCase().includes('page-map') &&
+                    issue.message.toLowerCase() === fixedIssue.message.toLowerCase()
+                );
+
+                samePageMapIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked page-map validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+                });
+            }
+            // For other RSC-005 issues that were successfully fixed by ValidationStructureFixer, mark exact same issues as fixed
             else {
                 const sameIssues = context.issues.filter(issue =>
                     !issue.fixed &&

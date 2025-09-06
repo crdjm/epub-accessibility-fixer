@@ -14,6 +14,7 @@ export interface EpubCheckResult {
     warningCount: number;
     errorCount: number;
     outputFile?: string;
+    outputTextFile?: string; // Add text file output
 }
 
 export class ValidationRunner {
@@ -45,12 +46,18 @@ export class ValidationRunner {
             const inputBasename = path.basename(epubPath, '.epub');
             const inputDir = path.dirname(epubPath);
 
-            const outputPath = keepOutput
+            const jsonOutputPath = keepOutput
                 ? path.join(inputDir, `${inputBasename}_epubcheck_${timestamp}.json`)
                 : path.join(path.dirname(epubPath), `validation-${timestamp}.json`);
 
+            // Also create a text output file for console output when keeping output
+            // Modified to use a fixed name instead of timestamped name
+            const textOutputPath = keepOutput
+                ? path.join(inputDir, 'epubcheck.txt')
+                : undefined;
+
             // Run epubcheck with JSON output
-            const command = `java -jar "${this.epubCheckPath}" "${epubPath}" --json "${outputPath}"`;
+            const command = `java -jar "${this.epubCheckPath}" "${epubPath}" --json "${jsonOutputPath}"`;
 
             let stdout = '';
             let stderr = '';
@@ -68,15 +75,26 @@ export class ValidationRunner {
                 stderr = error.stderr || '';
             }
 
+            // Save console output to text file if requested
+            if (keepOutput && textOutputPath) {
+                try {
+                    const consoleOutput = stdout + stderr;
+                    await fs.writeFile(textOutputPath, consoleOutput, 'utf8');
+                    this.logger.info(`EpubCheck console output saved: ${textOutputPath}`);
+                } catch (error) {
+                    this.logger.warn(`Failed to save EpubCheck console output: ${error}`);
+                }
+            }
+
             // Parse JSON output if available
             let issues: ValidationIssue[] = [];
             let valid = true;
             let warningCount = 0;
             let errorCount = 0;
 
-            if (await fs.pathExists(outputPath)) {
+            if (await fs.pathExists(jsonOutputPath)) {
                 try {
-                    const jsonResult = await fs.readJson(outputPath);
+                    const jsonResult = await fs.readJson(jsonOutputPath);
                     const parseResult = this.parseEpubCheckJson(jsonResult);
                     issues = parseResult.issues;
                     valid = parseResult.valid;
@@ -94,9 +112,12 @@ export class ValidationRunner {
 
                 // Clean up temporary file only if not keeping output
                 if (!keepOutput) {
-                    await fs.remove(outputPath);
+                    await fs.remove(jsonOutputPath);
+                    if (textOutputPath) {
+                        await fs.remove(textOutputPath);
+                    }
                 } else {
-                    this.logger.info(`EpubCheck output saved: ${outputPath}`);
+                    this.logger.info(`EpubCheck JSON output saved: ${jsonOutputPath}`);
                 }
             } else {
                 // Parse text output
@@ -114,7 +135,8 @@ export class ValidationRunner {
                 issues,
                 warningCount,
                 errorCount,
-                outputFile: keepOutput ? outputPath : undefined
+                outputFile: keepOutput ? jsonOutputPath : undefined,
+                outputTextFile: (keepOutput && textOutputPath) ? textOutputPath : undefined // Return text file path
             };
 
         } catch (error) {
@@ -259,6 +281,7 @@ export class ValidationRunner {
             'OPF-004', // Invalid metadata
             'OPF-025', // Missing language
             'OPF-026', // Invalid language
+            'OPF-073', // DOCTYPE external identifiers
             'OPF-096', // Non-linear content reachability
             'HTM-009', // Missing title
             'HTM-011', // Missing lang attribute

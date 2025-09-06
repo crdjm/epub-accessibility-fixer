@@ -200,6 +200,7 @@ export class EpubAccessibilityProcessor {
                 },
                 outputFiles: options.keepOutput ? {
                     epubCheck: validationResult?.outputFile,
+                    epubCheckText: validationResult?.outputTextFile, // Add text file output
                     daisyAce: accessibilityResult?.outputFile
                 } : undefined
             };

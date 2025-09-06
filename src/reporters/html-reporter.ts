@@ -626,6 +626,37 @@ export class HtmlReportGenerator {
                 return [specificFix || allRelevantDetails[0]];
             }
             
+            // For RSC-005 issues, show only one fix detail since they can have multiple related fixes
+            if (issue.code === 'RSC-005') {
+                // Try to find a fix detail that matches the specific RSC-005 issue type
+                const specificFix = allRelevantDetails.find(detail => {
+                    // Check if the explanation mentions the specific RSC-005 issue type
+                    if (detail.explanation && issue.message) {
+                        const issueMessageLower = issue.message.toLowerCase();
+                        const explanationLower = detail.explanation.toLowerCase();
+                        
+                        // Match specific RSC-005 issue types
+                        if (issueMessageLower.includes('page-map') && explanationLower.includes('page-map')) {
+                            return true;
+                        }
+                        if (issueMessageLower.includes('http-equiv') && explanationLower.includes('http-equiv')) {
+                            return true;
+                        }
+                        if (issueMessageLower.includes('role') && explanationLower.includes('role')) {
+                            return true;
+                        }
+                        if (issueMessageLower.includes('xsi:type') && explanationLower.includes('xsi:type')) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                
+                // If we found a specific fix, return it; otherwise return the first one
+                // BUT limit to only one fix detail to avoid showing duplicates
+                return [specificFix || allRelevantDetails[0]];
+            }
+            
             // For other issue types with many fixes, limit to a reasonable number
             if (allRelevantDetails.length > 5) {
                 return allRelevantDetails.slice(0, 3); // Show first 3 fixes

@@ -107,6 +107,7 @@ export interface AnalysisResult {
     outputFiles?: {
         daisyAce?: string;
         epubCheck?: string;
+        epubCheckText?: string; // Add text file output
     };
 }
 

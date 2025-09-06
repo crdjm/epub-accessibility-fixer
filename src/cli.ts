@@ -63,6 +63,12 @@ async function runVerification(
                 verifyResult.outputFiles.epubCheck = verifyEpubCheckPath;
             }
             
+            if (verifyResult.outputFiles.epubCheckText) {
+                const verifyEpubCheckTextPath = path.join(verifyDir, 'epubcheck.txt');
+                await fs.move(verifyResult.outputFiles.epubCheckText, verifyEpubCheckTextPath);
+                verifyResult.outputFiles.epubCheckText = verifyEpubCheckTextPath;
+            }
+            
             if (verifyResult.outputFiles.daisyAce) {
                 const verifyDaisyPath = path.join(verifyDir, 'daisy_ace_verification');
                 await fs.move(verifyResult.outputFiles.daisyAce, verifyDaisyPath);
@@ -105,7 +111,10 @@ async function runVerification(
         console.log(`\n${chalk.blue('Verification Files Saved:')}`);
         console.log(`${chalk.gray('Directory:')} ${verifyDir}`);
         if (verifyResult.outputFiles?.epubCheck) {
-            console.log(`${chalk.gray('EpubCheck:')} ${path.basename(verifyResult.outputFiles.epubCheck)}`);
+            console.log(`${chalk.gray('EpubCheck JSON:')} ${path.basename(verifyResult.outputFiles.epubCheck)}`);
+        }
+        if (verifyResult.outputFiles?.epubCheckText) {
+            console.log(`${chalk.gray('EpubCheck Text:')} ${path.basename(verifyResult.outputFiles.epubCheckText)}`);
         }
         if (verifyResult.outputFiles?.daisyAce) {
             console.log(`${chalk.gray('DAISY ACE:')} ${path.basename(verifyResult.outputFiles.daisyAce)}`);

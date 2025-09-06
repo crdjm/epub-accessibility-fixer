@@ -1,6 +1,7 @@
 import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
+import * as path from 'path';
 
 type CheerioStatic = any;
 
@@ -16,6 +17,7 @@ export class ValidationStructureFixer extends BaseFixer {
     getHandledCodes(): string[] {
         return [
             'RSC-005', // Specific structural validation errors
+            'OPF-073', // DOCTYPE external identifiers
             // 'RSC-006', // Remote resource references (handled by ResourceReferenceFixer)
             'OPF-014', // Missing remote-resources property
             'dcterms:modified',
@@ -30,12 +32,15 @@ export class ValidationStructureFixer extends BaseFixer {
     }
 
     canFix(issue: ValidationIssue): boolean {
+        this.logger.info(`ValidationStructureFixer.canFix called for issue: code="${issue.code}", message="${issue.message}"`);
+        
         const handledCodes = this.getHandledCodes();
         const issueCodeLower = issue.code.toLowerCase();
         const issueMessageLower = issue.message.toLowerCase();
 
         // Debug logging
         this.logger.info(`ValidationStructureFixer checking issue: code="${issue.code}", message="${issue.message}"`);
+        this.logger.info(`Lowercase issue code: "${issueCodeLower}", lowercase message: "${issueMessageLower}"`);
 
         // Check direct code matches
         if (handledCodes.some(code => issueCodeLower.includes(code.toLowerCase()) || code.toLowerCase().includes(issueCodeLower))) {
@@ -50,7 +55,7 @@ export class ValidationStructureFixer extends BaseFixer {
             'spine element toc attribute must be set',
             'value of attribute "http-equiv" is invalid',
             'value of attribute "role" is invalid',
-            // Additional patterns for RSC-005 errors
+            // Additional patterns for RSC-005 errors - be more specific
             'rsc-005',
             'http-equiv',
             // Remove the generic 'role' pattern that was causing false positives
@@ -64,10 +69,24 @@ export class ValidationStructureFixer extends BaseFixer {
             'ncx',
             'opf:role', // Handle opf:role issues
             'remote resource', // Handle remote resource issues
-            'remote-resources' // Handle remote-resources property issues
+            'remote-resources', // Handle remote-resources property issues
+            // Add patterns for the new issues - be more specific about page-map
+            'attribute "page-map" not allowed here',
+            'external identifiers must not appear in the document type declaration',
+            // Additional patterns for OPF-073
+            'opf-073'
         ];
 
-        const canFix = fixableMessages.some(pattern => issueMessageLower.includes(pattern.toLowerCase()));
+        // Log all fixable messages for debugging
+        this.logger.info(`Checking against fixable messages: ${fixableMessages.join(', ')}`);
+        
+        const canFix = fixableMessages.some(pattern => {
+            const patternLower = pattern.toLowerCase();
+            const matches = issueMessageLower.includes(patternLower);
+            this.logger.info(`Checking pattern "${patternLower}" against message "${issueMessageLower}": ${matches}`);
+            return matches;
+        });
+        
         if (canFix) {
             this.logger.info(`ValidationStructureFixer can fix issue: matched by message content`);
         } else {
@@ -174,11 +193,33 @@ export class ValidationStructureFixer extends BaseFixer {
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
                     if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
+            } else if (issue.message.includes('page-map')) {
+                this.logger.info(`Handling page-map attribute issue`);
+                const result = await this.fixPageMapAttribute(issue, context);
+                this.logger.info(`Page-map fix result: success=${result.success}, message=${result.message}`);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
+                }
+            } else if (issue.message.includes('external identifiers must not appear in the document type declaration') ||
+                       issue.code === 'OPF-073') {
+                this.logger.info(`Handling DOCTYPE external identifiers issue`);
+                const result = await this.fixDoctypeExternalIdentifiers(issue, context);
+                this.logger.info(`DOCTYPE fix result: success=${result.success}, message=${result.message}`);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
+                }
             } else {
                 this.logger.info(`No handler found for this validation structure issue`);
             }
 
             if (fixApplied) {
+                this.logger.info(`Successfully applied fix: ${fixDescription}`);
                 return this.createFixResult(
                     true,
                     fixDescription,
@@ -186,6 +227,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     { issueType: issue.code, fixDetails }
                 );
             } else {
+                this.logger.warn(`Could not fix validation issue: ${issue.code} - ${issue.message}`);
                 return this.createFixResult(
                     false,
                     `Could not fix validation issue: ${issue.code}`
@@ -514,6 +556,7 @@ export class ValidationStructureFixer extends BaseFixer {
         return this.createFixResult(false, 'Could not determine appropriate action for spine toc attribute');
     }
 
+    /**
     /**
      * Fix invalid http-equiv attributes in HTML files
      */
@@ -1221,6 +1264,277 @@ export class ValidationStructureFixer extends BaseFixer {
     }
 
     /**
+     * Fix page-map attribute issue in OPF files
+     * RSC-005: attribute "page-map" not allowed here
+     */
+    private async fixPageMapAttribute(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        this.logger.info(`Attempting to fix page-map attribute issue: ${issue.message}`);
+        
+        // Find OPF file - either from issue location or search all files
+        let opfContent: EpubContent | null = null;
+        let opfPath: string = '';
+
+        if (issue.location?.file) {
+            opfContent = this.findContentByPath(context, issue.location.file);
+            opfPath = issue.location.file;
+            this.logger.info(`Looking for OPF file at specified location: ${issue.location.file}`);
+        } else {
+            this.logger.info(`Searching for OPF file in all contents`);
+            // Search for OPF file
+            for (const [path, content] of context.contents) {
+                if (path.endsWith('.opf') || content.mediaType === 'application/oebps-package+xml') {
+                    opfContent = content;
+                    opfPath = path;
+                    this.logger.info(`Found OPF file candidate: ${path}`);
+                    break;
+                }
+            }
+        }
+
+        if (!opfContent) {
+            this.logger.warn('Could not find OPF file to fix page-map attribute');
+            return this.createFixResult(false, 'Could not find OPF file to fix page-map attribute');
+        }
+
+        this.logger.info(`Found OPF file at: ${opfPath}`);
+        const $ = this.loadDocument(opfContent);
+        let fixed = false;
+        const fixDetails: FixDetail[] = [];
+
+        // Look for spine element with page-map attribute (specifically targeting the RSC-005 error)
+        const spine = $('spine[page-map]');
+        this.logger.info(`Found ${spine.length} spine elements with page-map attribute`);
+        
+        if (spine.length > 0) {
+            // ONLY process the first spine element with page-map attribute to avoid duplicate fixes
+            const element = spine.first();
+            const $element = $(element.get(0));
+            const pageMapAttr = $element.attr('page-map');
+            if (pageMapAttr !== undefined) {
+                const originalHtml = $.html($element);
+                // Remove the page-map attribute
+                $element.removeAttr('page-map');
+                fixed = true;
+                const fixedHtml = $.html($element);
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Removed invalid page-map attribute from spine element`,
+                    element: 'spine',
+                    attribute: 'page-map',
+                    oldValue: pageMapAttr,
+                    newValue: undefined
+                });
+                this.logger.info(`Removed page-map attribute with value: ${pageMapAttr} from spine element`);
+            }
+        } else {
+            // Fallback: Look for any element with page-map attribute (broader search)
+            // BUT only process the first one to avoid duplicate fixes
+            const pageMapElements = $('[page-map]');
+            if (pageMapElements.length > 0) {
+                // ONLY process the first element with page-map attribute
+                const element = pageMapElements.first();
+                const $element = $(element.get(0));
+                const pageMapAttr = $element.attr('page-map');
+                if (pageMapAttr !== undefined) {
+                    const originalHtml = $.html($element);
+                    // Remove the page-map attribute
+                    $element.removeAttr('page-map');
+                    fixed = true;
+                    const fixedHtml = $.html($element);
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed invalid page-map attribute from ${element.get(0).tagName || 'element'}`,
+                        element: element.get(0).tagName || 'unknown',
+                        attribute: 'page-map',
+                        oldValue: pageMapAttr,
+                        newValue: undefined
+                    });
+                    this.logger.info(`Removed page-map attribute with value: ${pageMapAttr} from ${element.get(0).tagName || 'element'}`);
+                }
+            }
+        }
+
+        if (fixed) {
+            this.logger.info(`Successfully fixed page-map attribute issue, saving document`);
+            this.saveDocument($, opfContent);
+            return this.createFixResult(
+                true,
+                'Removed invalid page-map attribute from OPF file',
+                [opfPath],
+                { fixDetails }
+            );
+        }
+
+        this.logger.warn(`No page-map attribute found to fix in file: ${opfPath}`);
+        return this.createFixResult(false, 'No page-map attribute found to fix');
+    }
+
+    /**
+     * Fix DOCTYPE external identifiers in XML files
+     * OPF-073: External identifiers must not appear in the document type declaration
+     */
+    private async fixDoctypeExternalIdentifiers(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        this.logger.info(`Attempting to fix DOCTYPE external identifiers issue: ${issue.message}`);
+        
+        // Find XML file - either from issue location or search for it
+        let xmlContent: EpubContent | null = null;
+        let xmlPath: string = '';
+
+        if (issue.location?.file) {
+            xmlContent = this.findContentByPath(context, issue.location.file);
+            xmlPath = issue.location.file;
+            this.logger.info(`Looking for XML file at specified location: ${issue.location.file}`);
+        } else {
+            this.logger.info(`Searching for XML files with DOCTYPE declarations in all contents`);
+            // Search for XML files that might contain DOCTYPE declarations
+            // CHECK ALL XML files, not just container.xml
+            for (const [path, content] of context.contents) {
+                if ((path.endsWith('.opf') || path.endsWith('.xhtml') || path.endsWith('.html') || path.endsWith('.xml')) &&
+                    typeof content.content === 'string' && content.content.includes('<!DOCTYPE')) {
+                    xmlContent = content;
+                    xmlPath = path;
+                    this.logger.info(`Found XML file with DOCTYPE candidate: ${path}`);
+                    break;
+                }
+            }
+        }
+
+        // Fallback: try to find any XML file with DOCTYPE
+        if (!xmlContent) {
+            this.logger.info(`Trying fallback search for any XML file with DOCTYPE`);
+            for (const [path, content] of context.contents) {
+                if ((path.endsWith('.opf') || path.endsWith('.xhtml') || path.endsWith('.html') || path.endsWith('.xml')) &&
+                    typeof content.content === 'string' && content.content.includes('<!DOCTYPE')) {
+                    xmlContent = content;
+                    xmlPath = path;
+                    this.logger.info(`Found XML file with DOCTYPE fallback: ${path}`);
+                    break;
+                }
+            }
+        }
+
+        if (!xmlContent) {
+            this.logger.warn('Could not find XML file with DOCTYPE to fix external identifiers');
+            return this.createFixResult(false, 'Could not find XML file with DOCTYPE to fix external identifiers');
+        }
+
+        this.logger.info(`Found XML file with DOCTYPE at: ${xmlPath}`);
+        
+        // For XML files, we need to work with the raw content since Cheerio may not handle DOCTYPE properly
+        if (typeof xmlContent.content !== 'string') {
+            this.logger.warn('XML content is not text - cannot process');
+            return this.createFixResult(false, 'XML content is not text - cannot process');
+        }
+
+        let content = xmlContent.content;
+        let fixed = false;
+        const fixDetails: FixDetail[] = [];
+
+        // Look for DOCTYPE declaration with external identifiers
+        // Pattern: <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+        // Or: <!DOCTYPE container PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+        // Should be simplified to: <!DOCTYPE container>
+        const doctypeRegex = /<!DOCTYPE\s+([^>\s]+)(?:\s+PUBLIC\s+"[^"]*"(?:\s+"[^"]*")?)?[^>]*>/i;
+        const match = content.match(doctypeRegex);
+        
+        if (match) {
+            const originalDoctype = match[0];
+            const doctypeName = match[1] || 'html';
+            const simplifiedDoctype = `<!DOCTYPE ${doctypeName}>`;
+            
+            this.logger.info(`Found DOCTYPE with PUBLIC identifier: ${originalDoctype}`);
+            
+            // Replace the complex DOCTYPE with simple one that only has the name
+            const originalContent = content;
+            content = content.replace(doctypeRegex, simplifiedDoctype);
+            fixed = true;
+            
+            fixDetails.push({
+                filePath: xmlPath,
+                originalContent: originalContent,
+                fixedContent: content,
+                explanation: `Simplified DOCTYPE declaration to remove external identifiers`,
+                element: 'DOCTYPE',
+                attribute: undefined,
+                oldValue: originalDoctype,
+                newValue: simplifiedDoctype
+            });
+            
+            this.logger.info(`Replaced DOCTYPE: "${originalDoctype}" with "${simplifiedDoctype}"`);
+        } else {
+            // Try another pattern for DOCTYPE with SYSTEM identifiers
+            const systemDoctypeRegex = /<!DOCTYPE\s+([^>\s]+)(?:\s+SYSTEM\s+"[^"]*")?[^>]*>/i;
+            const systemMatch = content.match(systemDoctypeRegex);
+            
+            if (systemMatch) {
+                const originalDoctype = systemMatch[0];
+                const doctypeName = systemMatch[1] || 'html';
+                const simplifiedDoctype = `<!DOCTYPE ${doctypeName}>`;
+                
+                this.logger.info(`Found DOCTYPE with SYSTEM identifier: ${originalDoctype}`);
+                
+                // Replace the complex DOCTYPE with simple one that only has the name
+                const originalContent = content;
+                content = content.replace(systemDoctypeRegex, simplifiedDoctype);
+                fixed = true;
+                
+                fixDetails.push({
+                    filePath: xmlPath,
+                    originalContent: originalContent,
+                    fixedContent: content,
+                    explanation: `Simplified DOCTYPE declaration to remove SYSTEM identifier`,
+                    element: 'DOCTYPE',
+                    attribute: undefined,
+                    oldValue: originalDoctype,
+                    newValue: simplifiedDoctype
+                });
+                
+                this.logger.info(`Replaced DOCTYPE: "${originalDoctype}" with "${simplifiedDoctype}"`);
+            } else {
+                this.logger.info(`No DOCTYPE with external identifiers found in content`);
+            }
+        }
+
+        if (fixed) {
+            this.logger.info(`Successfully fixed DOCTYPE external identifiers issue, saving file`);
+            // Update the content in the context
+            xmlContent.content = content;
+            xmlContent.modified = true;
+            // Save the file to the correct location in the temporary directory
+            const fullPath = path.join(context.tempDir, xmlPath);
+            await this.saveRawFile(content, fullPath);
+            
+            return this.createFixResult(
+                true,
+                'Simplified DOCTYPE declaration to remove external identifiers',
+                [xmlPath],
+                { fixDetails }
+            );
+        }
+
+        this.logger.warn(`No DOCTYPE with external identifiers found to fix in file: ${xmlPath}`);
+        return this.createFixResult(false, 'No DOCTYPE with external identifiers found to fix');
+    }
+
+    /**
+     * Save raw file content directly to disk
+     */
+    private async saveRawFile(content: string, filePath: string): Promise<void> {
+        try {
+            const fs = await import('fs-extra');
+            await fs.writeFile(filePath, content, 'utf8');
+            this.logger.info(`Saved raw file: ${filePath}`);
+        } catch (error) {
+            this.logger.error(`Failed to save raw file ${filePath}: ${error}`);
+            throw error;
+        }
+    }
+
+    /**
      * Check if a date string is valid EPUB timestamp format: CCYY-MM-DDThh:mm:ssZ
      */
     private isValidEpubTimestamp(dateStr: string): boolean {
@@ -1324,3 +1638,5 @@ export class ValidationStructureFixer extends BaseFixer {
         return validRoles.includes(role.toLowerCase());
     }
 }
+
+export default ValidationStructureFixer;

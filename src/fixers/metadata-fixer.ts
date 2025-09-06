@@ -60,11 +60,14 @@ export class MetadataFixer extends BaseFixer {
         }
 
         // Specifically handle RSC-005 errors that contain xsi:type or EPUB 2.0 attributes
+        // But be more specific to avoid conflicts with ValidationStructureFixer
         if (issue.code === 'RSC-005' && 
             (issueMessageLower.includes('xsi:type') || 
              issueMessageLower.includes('dcterms:rfc4646') ||
-             issueMessageLower.includes('attribute') && issueMessageLower.includes('not allowed'))) {
-            this.logger.info(`MetadataFixer can fix RSC-005 issue with EPUB 2.0 attributes`);
+             (issueMessageLower.includes('attribute') && issueMessageLower.includes('not allowed') && 
+              (issueMessageLower.includes('dc:') || issueMessageLower.includes('dublin core'))) ||
+             (issueMessageLower.includes('missing') && issueMessageLower.includes('language')))) {
+            this.logger.info(`MetadataFixer can fix RSC-005 issue with EPUB 2.0 attributes or missing language`);
             return true;
         }
 
@@ -100,7 +103,12 @@ export class MetadataFixer extends BaseFixer {
             const fixDetails: FixDetail[] = [];
 
             // Handle language metadata AND EPUB 2.0 attribute issues
-            if (issue.code.includes('RSC-005') || issue.code.includes('epub-lang')) {
+            // ONLY handle RSC-005 issues with specific EPUB 2.0 attributes or language issues
+            if ((issue.code.includes('RSC-005') && 
+                (issue.message.includes('xsi:type') || 
+                 issue.message.includes('dcterms:RFC4646') ||
+                 (issue.message.includes('attribute') && issue.message.includes('not allowed')))) || 
+                issue.code.includes('epub-lang')) {
                 this.logger.info('Attempting to fix language metadata and EPUB 2.0 attributes');
                 
                 // First, handle EPUB 2.0 attribute removal if needed
