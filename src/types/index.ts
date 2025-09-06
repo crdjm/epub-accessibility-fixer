@@ -61,11 +61,26 @@ export interface AccessibilityIssue extends ValidationIssue {
     element?: string;
 }
 
+export interface FixDetail {
+    filePath: string;
+    originalContent?: string;
+    fixedContent?: string;
+    explanation: string;
+    element?: string;
+    attribute?: string;
+    oldValue?: string;
+    newValue?: string;
+    issueCode?: string;        // Add issue code for association
+    issueMessage?: string;     // Add issue message for association
+    selector?: string;         // Add CSS selector or XPath for precise element identification
+}
+
 export interface FixResult {
     success: boolean;
     message: string;
     changedFiles?: string[];
     details?: any;
+    fixDetails?: FixDetail[];
 }
 
 export interface AnalysisResult {

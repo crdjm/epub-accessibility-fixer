@@ -36,6 +36,7 @@ export interface ReportData {
 export class HtmlReportGenerator {
     private logger: Logger;
     private imageReviewGenerator: ImageReviewGenerator;
+    private reportData: ReportData | null = null;
 
     constructor(logger: Logger) {
         this.logger = logger;
@@ -95,7 +96,7 @@ export class HtmlReportGenerator {
         const validationScore = this.calculateValidationScore(context.issues);
         const accessibilityScore = this.calculateAccessibilityScore(context.issues);
 
-        return {
+        const reportData = {
             epub: {
                 title: context.metadata.title || path.basename(context.epubPath),
                 path: context.epubPath,
@@ -122,6 +123,11 @@ export class HtmlReportGenerator {
             fixes,
             recommendations: this.generateRecommendations(categorizedIssues)
         };
+
+        // Store the report data for use in other methods
+        this.reportData = reportData;
+        
+        return reportData;
     }
 
     private getEpubStats(context: ProcessingContext): { size: string; fileCount: number } {
@@ -362,6 +368,25 @@ export class HtmlReportGenerator {
         const accessibilityIssue = issue as AccessibilityIssue;
         const isAccessibility = issue.category === 'accessibility';
 
+        // Generate fix details HTML if the issue is fixed
+        let fixDetailsHtml = '';
+        if (issue.fixed && this.reportData?.fixes) {
+            const fixDetails = this.findFixDetailsForIssue(issue, this.reportData.fixes);
+            if (fixDetails && fixDetails.length > 0) {
+                fixDetailsHtml = `
+                <div class="issue-fix-details">
+                    <h4>Brief Fix Details</h4>
+                    ${fixDetails.map(detail => `
+                    <div class="issue-fix-detail-item">
+                        <div class="fix-explanation">${detail.explanation}</div>
+                        ${detail.element ? `<div class="fix-element">Element: &lt;${detail.element}&gt;</div>` : ''}
+                    </div>
+                    `).join('')}
+                </div>
+                `;
+            }
+        }
+
         return `
     <div class="issue-item ${priority} ${issue.fixed ? 'fixed' : ''}">
         <div class="issue-header">
@@ -384,10 +409,45 @@ export class HtmlReportGenerator {
         </div>
         ` : ''}
         ${issue.details ? `<div class="issue-details">${issue.details}</div>` : ''}
+        ${fixDetailsHtml}
     </div>`;
     }
 
     private generateFixItem(fix: FixResult): string {
+        let fixDetailsHtml = '';
+        
+        // Check for fix details in both locations (backward compatibility)
+        const fixDetails = fix.fixDetails || fix.details?.fixDetails;
+        if (fixDetails && fixDetails.length > 0) {
+            fixDetailsHtml = `
+            <div class="fix-details">
+                <h4>Detailed Changes</h4>
+                ${fixDetails.map(detail => `
+                <div class="fix-detail-item">
+                    <div class="fix-explanation">${detail.explanation}</div>
+                    <div class="fix-file-path">File: ${detail.filePath}</div>
+                    ${detail.originalContent || detail.fixedContent ? `
+                    <div class="fix-content-comparison">
+                        ${detail.originalContent ? `
+                        <div class="content-before">
+                            <label>Before:</label>
+                            <pre class="code-snippet">${this.escapeHtml(detail.originalContent)}</pre>
+                        </div>
+                        ` : ''}
+                        ${detail.fixedContent ? `
+                        <div class="content-after">
+                            <label>After:</label>
+                            <pre class="code-snippet">${this.escapeHtml(detail.fixedContent)}</pre>
+                        </div>
+                        ` : ''}
+                    </div>
+                    ` : ''}
+                </div>
+                `).join('')}
+            </div>
+            `;
+        }
+
         return `
     <div class="fix-item ${fix.success ? 'success' : 'failed'}">
         <div class="fix-status">${fix.success ? '✓' : '✗'}</div>
@@ -396,8 +456,18 @@ export class HtmlReportGenerator {
             ${fix.changedFiles && fix.changedFiles.length > 0 ? `
             <div class="fix-files">Changed files: ${fix.changedFiles.join(', ')}</div>
             ` : ''}
+            ${fixDetailsHtml}
         </div>
     </div>`;
+    }
+
+    private escapeHtml(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     private getScoreClass(score: number): string {
@@ -405,6 +475,165 @@ export class HtmlReportGenerator {
         if (score >= 70) return 'good';
         if (score >= 50) return 'fair';
         return 'poor';
+    }
+
+    /**
+     * Find fix details for a specific issue based on file path and issue characteristics
+     */
+    private findFixDetailsForIssue(issue: ValidationIssue, fixes: FixResult[]): any[] | null {
+        if (!issue.fixed || !issue.location?.file) {
+            return null;
+        }
+
+        // Extract filename from the issue location for partial matching
+        const issueFileName = issue.location.file.split('/').pop() || issue.location.file;
+
+        // Collect all relevant fix details from all fixes
+        let allRelevantDetails: any[] = [];
+
+        // Look through all fix results for relevant details
+        for (const fix of fixes) {
+            // Check for fix details in both locations (backward compatibility)
+            const fixDetails = fix.fixDetails || fix.details?.fixDetails;
+            if (fixDetails && Array.isArray(fixDetails)) {
+                // Filter fix details to only those relevant to this issue
+                const relevantDetails = fixDetails.filter(detail => {
+                    // First check file path match (exact, partial, or case-insensitive)
+                    const filePathMatch = 
+                        detail.filePath === issue.location?.file ||
+                        detail.filePath.split('/').pop() === issueFileName ||
+                        detail.filePath.toLowerCase() === issue.location?.file.toLowerCase() ||
+                        detail.filePath.split('/').pop()?.toLowerCase() === issueFileName.toLowerCase();
+                    
+                    if (!filePathMatch) {
+                        return false;
+                    }
+                    
+                    // If we have a selector in the fix detail, try to match it with the issue
+                    if (detail.selector) {
+                        // For image issues, check if the selector indicates an image element
+                        if (issue.code === 'image-alt' && detail.selector.includes('img')) {
+                            // For image-alt issues, we want to be more specific
+                            // Check if we can match based on the specific image element
+                            if (issue.message.includes('src=')) {
+                                // Extract src from issue message if available
+                                const srcMatch = issue.message.match(/src="([^"]+)"/);
+                                if (srcMatch && detail.selector.includes(srcMatch[1])) {
+                                    return true;
+                                }
+                            }
+                            return true;
+                        }
+                        // For heading issues, check if the selector indicates a heading element
+                        if ((issue.code === 'heading-order' || issue.code === 'heading-structure') && 
+                            detail.selector.match(/h[1-6]/)) {
+                            // For heading-order issues, try to match the specific heading text
+                            // Extract heading text from the issue message if available
+                            const headingTextMatch = issue.message.match(/"([^"]+)"/);
+                            if (headingTextMatch && detail.selector.includes(headingTextMatch[1])) {
+                                return true;
+                            }
+                            // If we can't match specific text, we'll limit the number of fixes shown later
+                            return true;
+                        }
+                        // For link issues, check if the selector indicates a link element
+                        if ((issue.code === 'link-in-text-block' || issue.code === 'link-name') && 
+                            detail.selector.includes('a')) {
+                            return true;
+                        }
+                        // For language issues, check if the selector indicates html or body elements
+                        if ((issue.code === 'epub-lang' || issue.code === 'html-has-lang' || issue.code === 'missing-lang') && 
+                            (detail.selector.includes('html') || detail.selector.includes('body'))) {
+                            return true;
+                        }
+                    }
+                    
+                    // If we have issue code in the fix detail, match it with the issue code
+                    if (detail.issueCode) {
+                        return detail.issueCode === issue.code;
+                    }
+                    
+                    // If we have issue message in the fix detail, check if it's related to the issue
+                    if (detail.issueMessage) {
+                        return detail.issueMessage.includes(issue.code) || 
+                               issue.message.includes(detail.issueMessage) ||
+                               detail.issueMessage.includes(issue.message);
+                    }
+                    
+                    // If no specific issue information, match by file only (fallback)
+                    return true;
+                });
+                
+                // Add relevant details to our collection
+                allRelevantDetails.push(...relevantDetails);
+            }
+        }
+
+        // Limit the number of fix details shown to avoid overwhelming the user
+        // For issues that typically have multiple instances (like image-alt and link issues),
+        // show only one representative fix detail
+        if (allRelevantDetails.length > 1) {
+            // For image-alt issues, show only one fix detail
+            if (issue.code === 'image-alt') {
+                return [allRelevantDetails[0]];
+            }
+            
+            // For link-related issues, show only one fix detail
+            if (issue.code === 'link-in-text-block' || issue.code === 'link-name') {
+                return [allRelevantDetails[0]];
+            }
+            
+            // For language-related issues, show only one fix detail
+            if (issue.code === 'epub-lang' || issue.code === 'html-has-lang' || issue.code === 'missing-lang') {
+                return [allRelevantDetails[0]];
+            }
+            
+            // For heading-order issues, show only one fix detail since we can't match specific headings
+            if (issue.code === 'heading-order' || issue.code === 'heading-structure') {
+                return [allRelevantDetails[0]];
+            }
+            
+            // For metadata issues, show only one fix detail that matches the specific metadata type
+            if (issue.code.includes('metadata') || issue.code.includes('accessibility')) {
+                // Try to find a fix detail that matches the specific metadata type
+                const specificFix = allRelevantDetails.find(detail => {
+                    // Check if the explanation mentions the specific metadata type
+                    if (detail.explanation && issue.code) {
+                        const issueCodeLower = issue.code.toLowerCase();
+                        const explanationLower = detail.explanation.toLowerCase();
+                        
+                        // Match specific metadata types
+                        if (issueCodeLower.includes('accessmode') && explanationLower.includes('accessmode')) {
+                            return true;
+                        }
+                        if (issueCodeLower.includes('accessmodesufficient') && explanationLower.includes('accessmodesufficient')) {
+                            return true;
+                        }
+                        if (issueCodeLower.includes('accessibilityfeature') && explanationLower.includes('accessibilityfeature')) {
+                            return true;
+                        }
+                        if (issueCodeLower.includes('accessibilityhazard') && explanationLower.includes('accessibilityhazard')) {
+                            return true;
+                        }
+                        if (issueCodeLower.includes('accessibilitysummary') && explanationLower.includes('accessibilitysummary')) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                
+                // If we found a specific fix, return it; otherwise return the first one
+                return [specificFix || allRelevantDetails[0]];
+            }
+            
+            // For other issue types with many fixes, limit to a reasonable number
+            if (allRelevantDetails.length > 5) {
+                return allRelevantDetails.slice(0, 3); // Show first 3 fixes
+            }
+        }
+
+        // Return all relevant details, or null if none found
+        return allRelevantDetails.length > 0 ? allRelevantDetails : null;
     }
 
     private getReportStyles(): string {
@@ -428,7 +657,6 @@ export class HtmlReportGenerator {
         .summary-number { font-size: 2.5em; font-weight: bold; color: #333; }
         
         .scores { display: flex; gap: 30px; }
-        .score-item { display: flex; align-items: center; gap: 10px; }
         .score { padding: 8px 16px; border-radius: 20px; font-weight: bold; }
         .score.excellent { background: #d4edda; color: #155724; }
         .score.good { background: #d1ecf1; color: #0c5460; }
@@ -516,6 +744,39 @@ export class HtmlReportGenerator {
         .issue-location { font-size: 0.9em; color: #666; font-family: monospace; }
         .issue-details { font-size: 0.9em; color: #666; margin-top: 8px; }
         
+        .issue-fix-details { 
+            margin-top: 10px; 
+            padding: 10px; 
+            background-color: #e8f5e9; 
+            border-left: 3px solid #4caf50; 
+            border-radius: 4px; 
+        }
+        .issue-fix-details h4 { 
+            margin: 0 0 8px 0; 
+            color: #2e7d32; 
+            font-size: 0.9em; 
+        }
+        .issue-fix-detail-item { 
+            margin-bottom: 8px; 
+            padding-bottom: 8px; 
+            border-bottom: 1px solid #c8e6c9; 
+        }
+        .issue-fix-detail-item:last-child { 
+            margin-bottom: 0; 
+            padding-bottom: 0; 
+            border-bottom: none; 
+        }
+        .fix-explanation { 
+            font-size: 0.85em; 
+            color: #333; 
+            margin-bottom: 4px; 
+        }
+        .fix-element { 
+            font-size: 0.8em; 
+            color: #666; 
+            font-family: monospace; 
+        }
+        
         .wcag-info { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.9em; }
         .impact { padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
         .impact.critical { background: #dc3545; color: white; }
@@ -532,6 +793,38 @@ export class HtmlReportGenerator {
         .fix-message { font-weight: 500; }
         .fix-files { font-size: 0.9em; color: #666; margin-top: 5px; }
         
+        .fix-details { margin-top: 15px; padding: 15px; background: rgba(255,255,255,0.7); border-radius: 4px; }
+        .fix-details h4 { margin-top: 0; color: #333; }
+        .fix-detail-item { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+        .fix-detail-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .fix-detail-item .fix-explanation { font-weight: 500; margin-bottom: 8px; }
+        .fix-file-path { font-size: 0.9em; color: #666; margin-bottom: 10px; }
+        .fix-content-comparison { 
+            display: grid; 
+            grid-template-columns: 1fr; 
+            gap: 15px; 
+            margin-top: 10px;
+        }
+        .content-before, .content-after { }
+        .content-before label, .content-after label { 
+            display: block; 
+            font-weight: bold; 
+            margin-bottom: 5px; 
+        }
+        .content-before label { color: #dc3545; }
+        .content-after label { color: #28a745; }
+        .code-snippet { 
+            background: #f8f9fa; 
+            padding: 10px; 
+            border-radius: 4px; 
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; 
+            font-size: 0.85em; 
+            overflow-x: auto; 
+            margin: 0; 
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
         .metadata { padding: 30px; border-top: 1px solid #eee; }
         .metadata h2 { margin-top: 0; color: #333; }
         .metadata-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
@@ -541,11 +834,16 @@ export class HtmlReportGenerator {
         .report-footer { padding: 20px 30px; background: #f8f9fa; border-radius: 0 0 8px 8px; text-align: center; color: #666; font-size: 0.9em; }
         .report-footer p { margin: 5px 0; }
         
+        @media (min-width: 769px) {
+            .fix-content-comparison { grid-template-columns: 1fr 1fr; }
+        }
+        
         @media (max-width: 768px) {
             .summary-grid { grid-template-columns: 1fr; }
             .scores { flex-direction: column; }
             .metadata-grid { grid-template-columns: 1fr; }
             .issue-header { flex-wrap: wrap; }
+            .fix-content-comparison { grid-template-columns: 1fr; }
         }
     `;
     }

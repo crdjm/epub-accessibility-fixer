@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -63,15 +63,17 @@ export class HeadingStructureFixer extends BaseFixer {
         try {
             const changedFiles: string[] = [];
             let totalFixed = 0;
+            const fixDetails: FixDetail[] = [];
 
             // If issue specifies a file, fix only that file
             if (issue.location?.file) {
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
-                    const fixed = await this.fixHeadingStructureInFile(content);
+                    const { fixed, details } = await this.fixHeadingStructureInFile(content);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
+                        fixDetails.push(...details);
                     }
                 }
             } else {
@@ -79,10 +81,11 @@ export class HeadingStructureFixer extends BaseFixer {
                 const contentFiles = this.getAllContentFiles(context);
 
                 for (const content of contentFiles) {
-                    const fixed = await this.fixHeadingStructureInFile(content);
+                    const { fixed, details } = await this.fixHeadingStructureInFile(content);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
+                        fixDetails.push(...details);
                     }
                 }
             }
@@ -92,7 +95,7 @@ export class HeadingStructureFixer extends BaseFixer {
                     true,
                     `Fixed heading structure in ${changedFiles.length} files (${totalFixed} changes)`,
                     changedFiles,
-                    { changesApplied: totalFixed }
+                    { changesApplied: totalFixed, fixDetails }
                 );
             } else {
                 return this.createFixResult(
@@ -107,9 +110,10 @@ export class HeadingStructureFixer extends BaseFixer {
         }
     }
 
-    private async fixHeadingStructureInFile(content: EpubContent): Promise<number> {
+    private async fixHeadingStructureInFile(content: EpubContent): Promise<{ fixed: number; details: FixDetail[] }> {
         const $ = this.loadDocument(content);
         let fixedCount = 0;
+        const fixDetails: FixDetail[] = [];
 
         // Analyze current heading structure
         const headings: Array<{ element: CheerioElement; level: number; text: string }> = [];
@@ -121,16 +125,30 @@ export class HeadingStructureFixer extends BaseFixer {
         });
 
         if (headings.length === 0) {
-            return 0;
+            return { fixed: 0, details: fixDetails };
         }
 
         // Fix empty headings
         for (const heading of headings) {
             if (!heading.text) {
                 const $heading = $(heading.element);
+                const originalHtml = $.html($heading);
                 const fixed = this.fixEmptyHeading($heading, $, content.path);
                 if (fixed) {
                     fixedCount++;
+                    const fixedHtml = $.html($heading);
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Fixed empty heading: Added text or aria-label to empty ${heading.element.tagName}`,
+                        element: heading.element.tagName.toLowerCase(),
+                        attribute: undefined,
+                        oldValue: undefined,
+                        newValue: $heading.text() || $heading.attr('aria-label'),
+                        issueCode: 'heading-order',  // Add issue code
+                        selector: `${heading.element.tagName}:contains('${heading.text}')`  // Add selector
+                    });
                 }
             }
         }
@@ -141,8 +159,23 @@ export class HeadingStructureFixer extends BaseFixer {
             // Promote the first heading to h1
             const firstHeading = headings[0];
             if (firstHeading.level > 1 && firstHeading.text) { // Only promote if it has text
-                $(firstHeading.element).replaceWith($(`<h1>${firstHeading.text}</h1>`));
+                const $firstHeading = $(firstHeading.element);
+                const originalHtml = $.html($firstHeading);
+                $firstHeading.replaceWith($(`<h1>${firstHeading.text}</h1>`));
                 fixedCount++;
+                const fixedHtml = $.html($(`<h1>${firstHeading.text}</h1>`));
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Promoted first heading to h1: "${firstHeading.text}"`,
+                    element: 'h1',
+                    attribute: undefined,
+                    oldValue: undefined,
+                    newValue: firstHeading.text,
+                    issueCode: 'heading-order',  // Add issue code
+                    selector: `h1:contains('${firstHeading.text}')`  // Add selector
+                });
                 this.logger.info(`Promoted first heading to h1: "${firstHeading.text}"`);
             }
         }
@@ -156,23 +189,38 @@ export class HeadingStructureFixer extends BaseFixer {
             if (current.level > previous.level + 1 && current.text) { // Only fix if it has text
                 const newLevel = previous.level + 1;
                 const $current = $(current.element);
+                const originalHtml = $.html($current);
                 const newTag = `h${newLevel}`;
 
                 $current.replaceWith($(`<${newTag}>${current.text}</${newTag}>`));
                 fixedCount++;
+                const fixedHtml = $.html($(`<${newTag}>${current.text}</${newTag}>`));
+
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Adjusted heading level from h${current.level} to h${newLevel}: "${current.text}"`,
+                    element: newTag,
+                    attribute: undefined,
+                    oldValue: undefined,
+                    newValue: current.text,
+                    issueCode: 'heading-order',  // Add issue code
+                    selector: `${newTag}:contains('${current.text}')`  // Add selector
+                });
 
                 this.logger.info(`Adjusted heading level from h${current.level} to h${newLevel}: "${current.text}"`);
             }
         }
 
         // Ensure proper nesting within sections
-        this.fixHeadingNesting($, headings);
+        this.fixHeadingNesting($, headings, content.path, fixDetails);
 
         if (fixedCount > 0) {
             this.saveDocument($, content);
         }
 
-        return fixedCount;
+        return { fixed: fixedCount, details: fixDetails };
     }
 
     private fixEmptyHeading($heading: Cheerio, $: CheerioStatic, filePath: string): boolean {
@@ -301,7 +349,7 @@ export class HeadingStructureFixer extends BaseFixer {
         return null;
     }
 
-    private fixHeadingNesting($: CheerioStatic, headings: Array<{ element: CheerioElement; level: number; text: string }>): void {
+    private fixHeadingNesting($: CheerioStatic, headings: Array<{ element: CheerioElement; level: number; text: string }>, filePath: string, fixDetails: FixDetail[]): void {
         // Look for content that should have headings based on structure
 
         // Check for chapters or sections without proper headings
@@ -315,7 +363,21 @@ export class HeadingStructureFixer extends BaseFixer {
                 if (headingText) {
                     // Determine appropriate heading level based on nesting
                     const level = this.determineHeadingLevel($section, $);
+                    const originalHtml = $.html($section);
                     $section.prepend($(`<h${level}>${headingText}</h${level}>`));
+                    const fixedHtml = $.html($section);
+                    fixDetails.push({
+                        filePath: filePath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Added missing heading: "${headingText}" (h${level})`,
+                        element: `h${level}`,
+                        attribute: undefined,
+                        oldValue: undefined,
+                        newValue: headingText,
+                        issueCode: 'heading-order',  // Add issue code
+                        selector: `h${level}:contains('${headingText}')`  // Add selector
+                    });
                     this.logger.info(`Added missing heading: "${headingText}" (h${level})`);
                 }
             }
@@ -330,7 +392,21 @@ export class HeadingStructureFixer extends BaseFixer {
             // Check if this might be a heading
             if (this.looksLikeHeading(text, $parent)) {
                 const level = this.determineHeadingLevel($parent, $);
+                const originalHtml = $.html($parent);
                 $parent.replaceWith($(`<h${level}>${text}</h${level}>`));
+                const fixedHtml = $.html($parent);
+                fixDetails.push({
+                    filePath: filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Converted emphasized text to heading: "${text}" (h${level})`,
+                    element: `h${level}`,
+                    attribute: undefined,
+                    oldValue: undefined,
+                    newValue: text,
+                    issueCode: 'heading-order',  // Add issue code
+                    selector: `h${level}:contains('${text}')`  // Add selector
+                });
                 this.logger.info(`Converted emphasized text to heading: "${text}" (h${level})`);
             }
         });

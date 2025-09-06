@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -51,13 +51,11 @@ export class LanguageAttributeFixer extends BaseFixer {
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
         this.logger.info(`Fixing missing language attributes: ${issue.message}`);
-        this.logger.info(`Issue code: ${issue.code}, Location: ${issue.location?.file || 'global'}`);
 
         try {
             const changedFiles: string[] = [];
+            const fixDetails: FixDetail[] = [];
             let totalFixed = 0;
-
-            // Get language from metadata
             const defaultLanguage = this.getDefaultLanguage(context);
 
             if (!defaultLanguage) {
@@ -88,10 +86,11 @@ export class LanguageAttributeFixer extends BaseFixer {
                     if (typeof content.content === 'string') {
                         this.logger.info(`Content size: ${content.content.length} characters`);
 
-                        const fixed = await this.fixLanguageInFile(content, language);
-                        if (fixed > 0) {
+                        const { fixedCount, details } = await this.fixLanguageInFile(content, language);
+                        if (fixedCount > 0) {
                             changedFiles.push(content.path);
-                            totalFixed += fixed;
+                            totalFixed += fixedCount;
+                            fixDetails.push(...details);
                             this.logger.info(`Successfully fixed language attributes in ${content.path}`);
                         } else {
                             // Check if already has language - this is common for subsequent calls
@@ -106,7 +105,7 @@ export class LanguageAttributeFixer extends BaseFixer {
                                     true,
                                     `Language attribute already present: ${existingLang}`,
                                     changedFiles, // Include the file in changed files even if already fixed
-                                    { language: existingLang, alreadyFixed: true }
+                                    { language: existingLang, alreadyFixed: true, fixDetails }
                                 );
                             } else {
                                 this.logger.warn(`No language attributes were added to ${content.path} and none were found`);
@@ -138,10 +137,11 @@ export class LanguageAttributeFixer extends BaseFixer {
                 this.logger.info(`Found ${contentFiles.length} content files to check`);
 
                 for (const content of contentFiles) {
-                    const fixed = await this.fixLanguageInFile(content, language);
-                    if (fixed > 0) {
+                    const { fixedCount, details } = await this.fixLanguageInFile(content, language);
+                    if (fixedCount > 0) {
                         changedFiles.push(content.path);
-                        totalFixed += fixed;
+                        totalFixed += fixedCount;
+                        fixDetails.push(...details);
                     }
                 }
             }
@@ -157,7 +157,7 @@ export class LanguageAttributeFixer extends BaseFixer {
                     true,
                     `Added language attributes (${language}) to ${totalFixed} locations`,
                     changedFiles,
-                    { language, locationsFixed: totalFixed }
+                    { language, locationsFixed: totalFixed, fixDetails }
                 );
             } else {
                 // More detailed logging for debugging
@@ -254,9 +254,10 @@ export class LanguageAttributeFixer extends BaseFixer {
         return null;
     }
 
-    private async fixLanguageInFile(content: EpubContent, language: string): Promise<number> {
+    private async fixLanguageInFile(content: EpubContent, language: string): Promise<{ fixedCount: number; details: FixDetail[] }> {
         const $ = this.loadDocument(content);
         let fixedCount = 0;
+        const fixDetails: FixDetail[] = [];
 
         this.logger.info(`Checking language attributes in file: ${content.path}`);
         this.logger.info(`Target language: ${language}`);
@@ -276,6 +277,7 @@ export class LanguageAttributeFixer extends BaseFixer {
         if ($html.length > 0) {
             const existingLang = $html.attr('lang');
             const existingXmlLang = $html.attr('xml:lang');
+            const originalHtml = $.html($html);
 
             this.logger.info(`Existing lang attribute: ${existingLang || 'NONE'}`);
             this.logger.info(`Existing xml:lang attribute: ${existingXmlLang || 'NONE'}`);
@@ -285,6 +287,17 @@ export class LanguageAttributeFixer extends BaseFixer {
                 $html.attr('lang', language);
                 $html.attr('xml:lang', language);
                 fixedCount++;
+                const fixedHtml = $.html($html);
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added language attributes to HTML element`,
+                    element: 'html',
+                    attribute: 'lang',
+                    oldValue: 'undefined',
+                    newValue: language
+                });
                 this.logger.info(`✓ Added language attributes to html element: ${language}`);
 
                 // Verify the attributes were actually set
@@ -326,8 +339,20 @@ export class LanguageAttributeFixer extends BaseFixer {
             // Only add lang to body if html doesn't have it and body doesn't have it
             if (!existingLang && !parentLang) {
                 this.logger.info(`Adding lang attribute to body element...`);
+                const originalBody = $.html($body);
                 $body.attr('lang', language);
                 fixedCount++;
+                const fixedBody = $.html($body);
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalBody,
+                    fixedContent: fixedBody,
+                    explanation: `Added language attribute to body element`,
+                    element: 'body',
+                    attribute: 'lang',
+                    oldValue: 'undefined',
+                    newValue: language
+                });
                 this.logger.info(`✓ Added language attribute to body element: ${language}`);
                 
                 // Save the document if we haven't already
@@ -348,49 +373,33 @@ export class LanguageAttributeFixer extends BaseFixer {
             const hasLang = $element.attr('lang') || $element.attr('xml:lang');
             const parentHasLang = $element.parents('[lang], [xml\\:lang]').length > 0;
 
-            elementsChecked++;
-
-            // If element has substantial text but no language inheritance
+            // Only process elements with substantial text content and no language attributes
             if (text.length > 50 && !hasLang && !parentHasLang) {
-                $element.attr('lang', language);
-                fixedCount++;
-                this.logger.info(`✓ Added language attribute to ${element.tagName.toLowerCase()} element`);
-            }
-        });
-
-        this.logger.info(`Checked ${elementsChecked} content elements for language attributes`);
-
-        // Check for elements with different languages
-        this.fixMixedLanguageContent($, language);
-
-        // Check for elements that should have language specified
-        $('[title], [alt]').each((_, element) => {
-            const $element = $(element);
-            const title = $element.attr('title');
-            const alt = $element.attr('alt');
-
-            // If title or alt text appears to be in a different language
-            if (title || alt) {
-                const detectedLang = this.detectLanguageFromText(title || alt || '');
-                if (detectedLang && detectedLang !== language) {
-                    if (!$element.attr('lang')) {
-                        $element.attr('lang', detectedLang);
-                        fixedCount++;
-                        this.logger.info(`✓ Added language attribute to element with foreign text: ${detectedLang}`);
-                    }
+                elementsChecked++;
+                if (elementsChecked <= 5) { // Limit to first 5 elements for performance
+                    this.logger.info(`Adding language attribute to element with text: ${text.substring(0, 50)}...`);
+                    const originalElement = $.html($element);
+                    $element.attr('lang', language);
+                    fixedCount++;
+                    const fixedElement = $.html($element);
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalElement,
+                        fixedContent: fixedElement,
+                        explanation: `Added language attribute to element with text content`,
+                        element: $element.prop('tagName')?.toLowerCase() || 'element',
+                        attribute: 'lang',
+                        oldValue: 'undefined',
+                        newValue: language
+                    });
+                    this.logger.info(`✓ Added language attribute to element`);
                 }
             }
         });
 
-        this.logger.info(`Total fixes applied in ${content.path}: ${fixedCount}`);
+        this.logger.info(`Finished processing ${content.path}. Fixed count: ${fixedCount}, Elements checked: ${elementsChecked}`);
 
-        if (fixedCount > 0) {
-            this.logger.info(`Document has been modified with ${fixedCount} language attribute fixes`);
-        } else {
-            this.logger.warn(`No language attributes were added to ${content.path}`);
-        }
-
-        return fixedCount;
+        return { fixedCount, details: fixDetails };
     }
 
     private fixMixedLanguageContent($: CheerioStatic, defaultLanguage: string): void {

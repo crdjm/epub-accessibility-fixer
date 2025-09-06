@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -29,16 +29,18 @@ export class TitleFixer extends BaseFixer {
 
         try {
             const changedFiles: string[] = [];
+            const fixDetails: FixDetail[] = [];
             let totalFixed = 0;
 
             // If issue specifies a file, fix only that file
             if (issue.location?.file) {
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
-                    const fixed = await this.fixTitleInFile(content, context);
+                    const { fixed, details } = await this.fixTitleInFile(content, context);
                     if (fixed) {
                         changedFiles.push(content.path);
                         totalFixed++;
+                        fixDetails.push(...details);
                     }
                 }
             } else {
@@ -46,10 +48,11 @@ export class TitleFixer extends BaseFixer {
                 const contentFiles = this.getAllContentFiles(context);
 
                 for (const content of contentFiles) {
-                    const fixed = await this.fixTitleInFile(content, context);
+                    const { fixed, details } = await this.fixTitleInFile(content, context);
                     if (fixed) {
                         changedFiles.push(content.path);
                         totalFixed++;
+                        fixDetails.push(...details);
                     }
                 }
             }
@@ -59,7 +62,7 @@ export class TitleFixer extends BaseFixer {
                     true,
                     `Added title elements to ${totalFixed} documents`,
                     changedFiles,
-                    { documentsFixed: totalFixed }
+                    { documentsFixed: totalFixed, fixDetails }
                 );
             } else {
                 return this.createFixResult(
@@ -74,12 +77,13 @@ export class TitleFixer extends BaseFixer {
         }
     }
 
-    private async fixTitleInFile(content: EpubContent, context: ProcessingContext): Promise<boolean> {
+    private async fixTitleInFile(content: EpubContent, context: ProcessingContext): Promise<{ fixed: boolean; details: FixDetail[] }> {
         const $ = this.loadDocument(content);
         const head = $('head');
+        const fixDetails: FixDetail[] = [];
 
         if (head.length === 0) {
-            return false; // No head element to work with
+            return { fixed: false, details: fixDetails }; // No head element to work with
         }
 
         const existingTitle = head.find('title');
@@ -90,19 +94,44 @@ export class TitleFixer extends BaseFixer {
 
             if (existingTitle.length > 0) {
                 // Update existing empty title
+                const originalHtml = $.html(existingTitle);
                 existingTitle.text(title);
+                const fixedHtml = $.html(existingTitle);
                 this.logger.info(`Updated title in ${content.path}: "${title}"`);
+                
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Updated empty title element with generated title: "${title}"`,
+                    element: 'title',
+                    attribute: undefined,
+                    oldValue: existingTitle.text() || undefined,
+                    newValue: title
+                });
             } else {
                 // Add new title element
-                head.prepend(`<title>${title}</title>`);
+                const titleElement = `<title>${title}</title>`;
+                head.prepend(titleElement);
                 this.logger.info(`Added title to ${content.path}: "${title}"`);
+                
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: undefined,
+                    fixedContent: titleElement,
+                    explanation: `Added new title element with generated title: "${title}"`,
+                    element: 'title',
+                    attribute: undefined,
+                    oldValue: undefined,
+                    newValue: title
+                });
             }
 
             this.saveDocument($, content);
-            return true;
+            return { fixed: true, details: fixDetails };
         }
 
-        return false; // Title already exists and is not empty
+        return { fixed: false, details: fixDetails }; // Title already exists and is not empty
     }
 
     private generateTitleForDocument($: CheerioStatic, content: EpubContent, context: ProcessingContext): string {

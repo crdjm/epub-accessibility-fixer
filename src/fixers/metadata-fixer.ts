@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -97,6 +97,7 @@ export class MetadataFixer extends BaseFixer {
             const $ = this.loadDocument(opfContent);
             let fixApplied = false;
             let fixDescription = '';
+            const fixDetails: FixDetail[] = [];
 
             // Handle language metadata AND EPUB 2.0 attribute issues
             if (issue.code.includes('RSC-005') || issue.code.includes('epub-lang')) {
@@ -111,6 +112,17 @@ export class MetadataFixer extends BaseFixer {
                     if (upgraded) {
                         fixApplied = true;
                         fixDescription = 'Removed EPUB 2.0 attributes and upgraded to EPUB 3.0';
+                        // Add fix details for EPUB 2.0 upgrade
+                        fixDetails.push({
+                            filePath: opfPath,
+                            originalContent: undefined,
+                            fixedContent: undefined,
+                            explanation: 'Removed EPUB 2.0 attributes and upgraded to EPUB 3.0',
+                            element: 'package',
+                            attribute: undefined,
+                            oldValue: undefined,
+                            newValue: undefined
+                        });
                     }
                 }
                 
@@ -118,6 +130,17 @@ export class MetadataFixer extends BaseFixer {
                 if (this.fixLanguageMetadata($, context)) {
                     fixApplied = true;
                     fixDescription += (fixDescription ? '; ' : '') + 'Added language metadata to OPF';
+                    // Add fix details for language metadata
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: undefined,
+                        fixedContent: undefined,
+                        explanation: 'Added language metadata to OPF',
+                        element: 'dc:language',
+                        attribute: undefined,
+                        oldValue: undefined,
+                        newValue: context.metadata.language || 'en'
+                    });
                 }
             }
 
@@ -140,6 +163,20 @@ export class MetadataFixer extends BaseFixer {
                     fixDescription += (fixDescription ? '; ' : '') + allAccessibilityFixes.join('; ');
                     this.logger.info(`Successfully applied accessibility fixes: ${allAccessibilityFixes.join('; ')}`);
                     
+                    // Add fix details for each accessibility fix
+                    allAccessibilityFixes.forEach(fix => {
+                        fixDetails.push({
+                            filePath: opfPath,
+                            originalContent: undefined,
+                            fixedContent: undefined,
+                            explanation: fix,
+                            element: 'metadata',
+                            attribute: undefined,
+                            oldValue: undefined,
+                            newValue: undefined
+                        });
+                    });
+                    
                     // If we upgraded to EPUB 3.0 and need navigation document, create it
                     if (allAccessibilityFixes.some(fix => fix.includes('Upgraded EPUB from 2.0 to 3.0'))) {
                         this.createNavigationFileIfNeeded(context, opfPath);
@@ -160,7 +197,7 @@ export class MetadataFixer extends BaseFixer {
                     true,
                     fixDescription,
                     [opfPath],
-                    { metadataType: issue.code }
+                    { metadataType: issue.code, fixDetails }
                 );
             } else {
                 this.logger.warn(`No fix applied for metadata issue: ${issue.code}`);
@@ -200,10 +237,6 @@ export class MetadataFixer extends BaseFixer {
         if (packageElement.length > 0 && !packageElement.attr('xml:lang')) {
             packageElement.attr('xml:lang', language);
             fixApplied = true;
-        }
-
-        if (fixApplied) {
-            this.logger.info(`Added language metadata: ${language}`);
         }
 
         return fixApplied;

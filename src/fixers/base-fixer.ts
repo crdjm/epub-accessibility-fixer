@@ -55,6 +55,17 @@ export abstract class BaseFixer {
     }
 
     protected createFixResult(success: boolean, message: string, changedFiles?: string[], details?: any): FixResult {
+        // If details contains fixDetails, make sure they're properly included in the result
+        if (details && details.fixDetails) {
+            return {
+                success,
+                message,
+                changedFiles,
+                details,
+                fixDetails: details.fixDetails
+            };
+        }
+        
         return {
             success,
             message,

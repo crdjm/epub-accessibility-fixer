@@ -85,16 +85,20 @@ export class LinkAccessibilityFixer extends BaseFixer {
         try {
             const changedFiles: string[] = [];
             let totalFixed = 0;
+            const fixDetails: any[] = []; // Add fix details collection
 
             // If issue specifies a file, fix only that file
             if (issue.location?.file) {
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
                     this.logger.info(`Processing file: ${content.path}`);
-                    const fixed = await this.fixLinksInFile(content, context, issue);
+                    const { fixed, details } = await this.fixLinksInFile(content, context, issue);
                     if (fixed) {
                         changedFiles.push(content.path);
                         totalFixed++;
+                        if (details && details.length > 0) {
+                            fixDetails.push(...details);
+                        }
                     }
                 }
             } else {
@@ -103,10 +107,13 @@ export class LinkAccessibilityFixer extends BaseFixer {
 
                 for (const content of contentFiles) {
                     this.logger.info(`Processing file: ${content.path}`);
-                    const fixed = await this.fixLinksInFile(content, context, issue);
+                    const { fixed, details } = await this.fixLinksInFile(content, context, issue);
                     if (fixed) {
                         changedFiles.push(content.path);
                         totalFixed++;
+                        if (details && details.length > 0) {
+                            fixDetails.push(...details);
+                        }
                     }
                 }
             }
@@ -116,7 +123,7 @@ export class LinkAccessibilityFixer extends BaseFixer {
                     true,
                     `Fixed link accessibility issues in ${totalFixed} files`,
                     changedFiles,
-                    { filesFixed: totalFixed }
+                    { filesFixed: totalFixed, fixDetails } // Include fix details
                 );
             } else {
                 return this.createFixResult(
@@ -131,10 +138,11 @@ export class LinkAccessibilityFixer extends BaseFixer {
         }
     }
 
-    private async fixLinksInFile(content: EpubContent, context: ProcessingContext, issue: ValidationIssue): Promise<boolean> {
+    private async fixLinksInFile(content: EpubContent, context: ProcessingContext, issue: ValidationIssue): Promise<{ fixed: boolean; details: any[] }> {
         this.logger.info(`Fixing links in file: ${content.path}`);
         const $ = this.loadDocument(content);
         let fixesApplied = false;
+        const fixDetails: any[] = []; // Add fix details collection
 
         // Find all links that need fixing
         $('a').each((_, link) => {
@@ -142,23 +150,27 @@ export class LinkAccessibilityFixer extends BaseFixer {
             this.logger.info(`Processing link with href: ${$link.attr('href') || 'no href'}`);
 
             // Fix empty or meaningless link text
-            if (this.fixLinkText($link)) {
+            const textFixed = this.fixLinkText($link, content.path, fixDetails);
+            if (textFixed) {
                 fixesApplied = true;
             }
 
             // Add visual distinction for links
-            if (this.addLinkDistinction($link)) {
+            const distinctionFixed = this.addLinkDistinction($link, content.path, fixDetails);
+            if (distinctionFixed) {
                 fixesApplied = true;
             }
 
             // Fix missing or poor aria labels
-            if (this.fixLinkAria($link)) {
+            const ariaFixed = this.fixLinkAria($link, content.path, fixDetails);
+            if (ariaFixed) {
                 fixesApplied = true;
             }
         });
 
         // Add CSS for better link accessibility
-        if (this.addLinkAccessibilityCSS($, content)) {
+        const cssFixed = this.addLinkAccessibilityCSS($, content, fixDetails);
+        if (cssFixed) {
             fixesApplied = true;
         }
 
@@ -167,12 +179,13 @@ export class LinkAccessibilityFixer extends BaseFixer {
             this.logger.info(`Fixed link accessibility issues in ${content.path}`);
         }
 
-        return fixesApplied;
+        return { fixed: fixesApplied, details: fixDetails };
     }
 
-    private fixLinkText($link: any): boolean {
+    private fixLinkText($link: any, filePath: string, fixDetails: any[]): boolean {
         const linkText = $link.text().trim();
         const href = $link.attr('href') || '';
+        const originalHtml = $link.toString(); // Get original HTML for comparison
         let fixed = false;
 
         // Check for empty links
@@ -190,10 +203,34 @@ export class LinkAccessibilityFixer extends BaseFixer {
                     if (meaningfulText) {
                         $link.attr('aria-label', `Image link: ${meaningfulText}`);
                         fixed = true;
+                        const fixedHtml = $link.toString();
+                        fixDetails.push({
+                            filePath,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Added aria-label to image link: "Image link: ${meaningfulText}"`,
+                            element: 'a',
+                            attribute: 'aria-label',
+                            oldValue: undefined,
+                            newValue: `Image link: ${meaningfulText}`,
+                            issueCode: 'link-name'  // Add issue code
+                        });
                         this.logger.info(`Added aria-label to image link: "Image link: ${meaningfulText}"`);
                     } else {
                         $link.attr('aria-label', 'Image link');
                         fixed = true;
+                        const fixedHtml = $link.toString();
+                        fixDetails.push({
+                            filePath,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Added generic aria-label to image link`,
+                            element: 'a',
+                            attribute: 'aria-label',
+                            oldValue: undefined,
+                            newValue: 'Image link',
+                            issueCode: 'link-name'  // Add issue code
+                        });
                         this.logger.info(`Added generic aria-label to image link`);
                     }
                 }
@@ -203,11 +240,34 @@ export class LinkAccessibilityFixer extends BaseFixer {
                 if (meaningfulText) {
                     $link.text(meaningfulText);
                     fixed = true;
+                    const fixedHtml = $link.toString();
+                    fixDetails.push({
+                        filePath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Added text to empty link: "${meaningfulText}"`,
+                        element: 'a',
+                        oldValue: '',
+                        newValue: meaningfulText,
+                        issueCode: 'link-name'  // Add issue code
+                    });
                     this.logger.info(`Added text to empty link: "${meaningfulText}"`);
                 } else {
                     // Add aria-label as fallback
                     $link.attr('aria-label', `Link to ${href}`);
                     fixed = true;
+                    const fixedHtml = $link.toString();
+                    fixDetails.push({
+                        filePath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Added aria-label to empty link`,
+                        element: 'a',
+                        attribute: 'aria-label',
+                        oldValue: undefined,
+                        newValue: `Link to ${href}`,
+                        issueCode: 'link-name'  // Add issue code
+                    });
                     this.logger.info(`Added aria-label to empty link`);
                 }
             }
@@ -217,11 +277,33 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (meaningfulText) {
                 $link.text(meaningfulText);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Replaced whitespace-only link text with: "${meaningfulText}"`,
+                    element: 'a',
+                    oldValue: linkText,
+                    newValue: meaningfulText,
+                    issueCode: 'link-name'  // Add issue code
+                });
                 this.logger.info(`Replaced whitespace-only link text with: "${meaningfulText}"`);
             } else {
                 // Add aria-label as fallback
                 $link.attr('aria-label', `Link to ${href}`);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added aria-label to whitespace-only link`,
+                    element: 'a',
+                    attribute: 'aria-label',
+                    oldValue: linkText,
+                    newValue: `Link to ${href}`
+                });
                 this.logger.info(`Added aria-label to whitespace-only link`);
             }
         }
@@ -233,12 +315,34 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (improvedText && improvedText !== linkText) {
                 $link.text(improvedText);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Improved link text from "${linkText}" to "${improvedText}"`,
+                    element: 'a',
+                    oldValue: linkText,
+                    newValue: improvedText
+                });
                 this.logger.info(`Improved link text from "${linkText}" to "${improvedText}"`);
             } else {
                 // Add descriptive aria-label
                 const ariaLabel = this.generateDescriptiveLabel(linkText, href);
                 $link.attr('aria-label', ariaLabel);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added descriptive aria-label: "${ariaLabel}"`,
+                    element: 'a',
+                    attribute: 'aria-label',
+                    oldValue: undefined,
+                    newValue: ariaLabel,
+                    issueCode: 'link-name'  // Add issue code
+                });
                 this.logger.info(`Added descriptive aria-label: "${ariaLabel}"`);
             }
         }
@@ -246,24 +350,38 @@ export class LinkAccessibilityFixer extends BaseFixer {
         return fixed;
     }
 
-    private addLinkDistinction($link: any): boolean {
+    private addLinkDistinction($link: any, filePath: string, fixDetails: any[]): boolean {
         // Add class for CSS styling to distinguish links
         const existingClass = $link.attr('class') || '';
+        const originalHtml = $link.toString();
 
         if (!existingClass.includes('epub-accessible-link')) {
             $link.attr('class', existingClass ? `${existingClass} epub-accessible-link` : 'epub-accessible-link');
+            const fixedHtml = $link.toString();
+            fixDetails.push({
+                filePath,
+                originalContent: originalHtml,
+                fixedContent: fixedHtml,
+                explanation: `Added CSS class for better link visibility`,
+                element: 'a',
+                attribute: 'class',
+                oldValue: existingClass || undefined,
+                newValue: existingClass ? `${existingClass} epub-accessible-link` : 'epub-accessible-link',
+                issueCode: 'link-in-text-block'  // Add issue code for link styling issues
+            });
             return true;
         }
 
         return false;
     }
 
-    private fixLinkAria($link: any): boolean {
+    private fixLinkAria($link: any, filePath: string, fixDetails: any[]): boolean {
         const href = $link.attr('href') || '';
         const linkText = $link.text().trim();
         const existingAriaLabel = $link.attr('aria-label');
         const existingAriaLabelledBy = $link.attr('aria-labelledby');
         const existingTitle = $link.attr('title');
+        const originalHtml = $link.toString();
         let fixed = false;
 
         this.logger.info(`Checking link: href="${href}", text="${linkText}", aria-label="${existingAriaLabel || 'none'}"`);
@@ -300,16 +418,49 @@ export class LinkAccessibilityFixer extends BaseFixer {
                             if (meaningfulLabel) {
                                 $link.attr('aria-label', `Image link: ${meaningfulLabel}`);
                                 fixed = true;
+                                const fixedHtml = $link.toString();
+                                fixDetails.push({
+                                    filePath,
+                                    originalContent: originalHtml,
+                                    fixedContent: fixedHtml,
+                                    explanation: `Added aria-label for image link with empty alt: "Image link: ${meaningfulLabel}"`,
+                                    element: 'a',
+                                    attribute: 'aria-label',
+                                    oldValue: currentAriaLabel || undefined,
+                                    newValue: `Image link: ${meaningfulLabel}`
+                                });
                                 this.logger.info(`Added aria-label for image link with empty alt: "Image link: ${meaningfulLabel}"`);
                             } else {
                                 $link.attr('aria-label', 'Image link');
                                 fixed = true;
+                                const fixedHtml = $link.toString();
+                                fixDetails.push({
+                                    filePath,
+                                    originalContent: originalHtml,
+                                    fixedContent: fixedHtml,
+                                    explanation: `Added generic aria-label for image link with empty alt`,
+                                    element: 'a',
+                                    attribute: 'aria-label',
+                                    oldValue: currentAriaLabel || undefined,
+                                    newValue: 'Image link'
+                                });
                                 this.logger.info(`Added generic aria-label for image link with empty alt`);
                             }
                         } else if (linkText) {
                             // If there's link text, use that for the aria-label
                             $link.attr('aria-label', linkText);
                             fixed = true;
+                            const fixedHtml = $link.toString();
+                            fixDetails.push({
+                                filePath,
+                                originalContent: originalHtml,
+                                fixedContent: fixedHtml,
+                                explanation: `Added aria-label based on link text: "${linkText}"`,
+                                element: 'a',
+                                attribute: 'aria-label',
+                                oldValue: currentAriaLabel || undefined,
+                                newValue: linkText
+                            });
                             this.logger.info(`Added aria-label based on link text: "${linkText}"`);
                         }
                     }
@@ -326,6 +477,17 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (meaningfulLabel) {
                 $link.attr('aria-label', meaningfulLabel);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added aria-label "${meaningfulLabel}" to element without accessible text`,
+                    element: 'a',
+                    attribute: 'aria-label',
+                    oldValue: existingAriaLabel || undefined,
+                    newValue: meaningfulLabel
+                });
                 this.logger.info(`Added aria-label "${meaningfulLabel}" to element without accessible text`);
             }
         }
@@ -338,6 +500,17 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (fallbackLabel) {
                 $link.attr('aria-label', fallbackLabel);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Replaced invalid aria-labelledby with aria-label "${fallbackLabel}"`,
+                    element: 'a',
+                    attribute: 'aria-label',
+                    oldValue: existingAriaLabelledBy,
+                    newValue: fallbackLabel
+                });
                 this.logger.info(`Replaced invalid aria-labelledby with aria-label "${fallbackLabel}"`);
             }
         }
@@ -348,6 +521,17 @@ export class LinkAccessibilityFixer extends BaseFixer {
             if (title) {
                 $link.attr('title', title);
                 fixed = true;
+                const fixedHtml = $link.toString();
+                fixDetails.push({
+                    filePath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added title "${title}" for additional context`,
+                    element: 'a',
+                    attribute: 'title',
+                    oldValue: existingTitle || undefined,
+                    newValue: title
+                });
                 this.logger.info(`Added title "${title}" for additional context`);
             }
         }
@@ -560,7 +744,7 @@ export class LinkAccessibilityFixer extends BaseFixer {
         return '';
     }
 
-    private addLinkAccessibilityCSS($: CheerioStatic, content: EpubContent): boolean {
+    private addLinkAccessibilityCSS($: CheerioStatic, content: EpubContent, fixDetails: any[]): boolean {
         // Check if CSS already exists
         if ($('style:contains("epub-accessible-link")').length > 0) {
             return false;
@@ -625,6 +809,12 @@ export class LinkAccessibilityFixer extends BaseFixer {
         } else {
             $('body').prepend(`<style type="text/css">${linkCSS}</style>`);
         }
+
+        fixDetails.push({
+            filePath: content.path,
+            explanation: `Added CSS for enhanced link accessibility`,
+            element: 'style'
+        });
 
         return true;
     }

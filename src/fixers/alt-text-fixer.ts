@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent, AIImageAnalysis } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, AIImageAnalysis, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 import * as fs from 'fs-extra';
@@ -65,6 +65,7 @@ export class AltTextFixer extends BaseFixer {
 
         try {
             const changedFiles: string[] = [];
+            const fixDetails: FixDetail[] = [];
             let totalFixed = 0;
             let processedSpecificFile = false;
 
@@ -75,11 +76,12 @@ export class AltTextFixer extends BaseFixer {
                 
                 if (content) {
                     this.logger.info(`Found content for file: ${content.path}`);
-                    const fixed = await this.fixAltTextInFile(content, context);
-                    if (fixed > 0) {
+                    const { fixedCount, details } = await this.fixAltTextInFile(content, context);
+                    if (fixedCount > 0) {
                         changedFiles.push(content.path);
-                        totalFixed += fixed;
-                        this.logger.info(`Successfully fixed ${fixed} images in ${content.path}`);
+                        totalFixed += fixedCount;
+                        fixDetails.push(...details);
+                        this.logger.info(`Successfully fixed ${fixedCount} images in ${content.path}`);
                     }
                     processedSpecificFile = true;
                 } else {
@@ -96,11 +98,12 @@ export class AltTextFixer extends BaseFixer {
                 this.logger.info(`Found ${contentFiles.length} content files to check`);
 
                 for (const content of contentFiles) {
-                    const fixed = await this.fixAltTextInFile(content, context);
-                    if (fixed > 0) {
+                    const { fixedCount, details } = await this.fixAltTextInFile(content, context);
+                    if (fixedCount > 0) {
                         changedFiles.push(content.path);
-                        totalFixed += fixed;
-                        this.logger.info(`Fixed ${fixed} images in ${content.path}`);
+                        totalFixed += fixedCount;
+                        fixDetails.push(...details);
+                        this.logger.info(`Fixed ${fixedCount} images in ${content.path}`);
                     }
                 }
             }
@@ -110,7 +113,7 @@ export class AltTextFixer extends BaseFixer {
                     true,
                     `Added alt text to ${totalFixed} images`,
                     changedFiles,
-                    { imagesFixed: totalFixed }
+                    { imagesFixed: totalFixed, fixDetails }
                 );
             } else {
                 // More detailed logging for debugging
@@ -146,9 +149,10 @@ export class AltTextFixer extends BaseFixer {
         }
     }
 
-    private async fixAltTextInFile(content: EpubContent, context: ProcessingContext): Promise<number> {
+    private async fixAltTextInFile(content: EpubContent, context: ProcessingContext): Promise<{ fixedCount: number; details: FixDetail[] }> {
         const $ = this.loadDocument(content);
         let fixedCount = 0;
+        const fixDetails: FixDetail[] = [];
 
         // Process images sequentially to avoid async issues
         const images = $('img').toArray();
@@ -169,17 +173,44 @@ export class AltTextFixer extends BaseFixer {
 
             if (isMissingAlt) {
                 const src = $img.attr('src') || '';
+                const originalHtml = $.html($img);
 
                 if (this.isDecorativeImage(imgElement, $)) {
                     // Add empty alt for decorative images
                     $img.attr('alt', '');
                     fixedCount++;
+                    const fixedHtml = $.html($img);
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Added empty alt attribute to decorative image`,
+                        element: 'img',
+                        attribute: 'alt',
+                        oldValue: existingAlt || 'undefined',
+                        newValue: '',
+                        issueCode: 'image-alt',  // Add issue code
+                        selector: `img[src="${src}"]`  // Add selector
+                    });
                     this.logger.info(`Added empty alt attribute for decorative image: ${src}`);
                 } else {
                     // Generate meaningful alt text with enhanced analysis
                     const altText = await this.generateMeaningfulAltText($img, $, content, src, context);
                     $img.attr('alt', altText);
                     fixedCount++;
+                    const fixedHtml = $.html($img);
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Added descriptive alt text to image`,
+                        element: 'img',
+                        attribute: 'alt',
+                        oldValue: existingAlt || 'undefined',
+                        newValue: altText,
+                        issueCode: 'image-alt',  // Add issue code
+                        selector: `img[src="${src}"]`  // Add selector
+                    });
                     this.logger.info(`Added alt text "${altText}" for image: ${src}`);
                 }
             }
@@ -193,7 +224,7 @@ export class AltTextFixer extends BaseFixer {
         const aiCount = context.aiImageAnalyses ? context.aiImageAnalyses.length : 0;
         this.logger.info(`Processed ${images.length} images, fixed ${fixedCount}, stored ${aiCount} AI analyses for review`);
 
-        return fixedCount;
+        return { fixedCount, details: fixDetails };
     }
 
     private async generateMeaningfulAltText($img: Cheerio, $: CheerioStatic, content: EpubContent, src: string, context: ProcessingContext): Promise<string> {

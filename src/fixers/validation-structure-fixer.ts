@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -83,6 +83,7 @@ export class ValidationStructureFixer extends BaseFixer {
 
         try {
             const changedFiles: string[] = [];
+            const fixDetails: FixDetail[] = [];
             let fixApplied = false;
             let fixDescription = '';
 
@@ -94,6 +95,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('element "dc:date" not allowed here') || 
                        issue.message.includes('multiple dc:date')) {
@@ -103,6 +105,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('spine element toc attribute must be set')) {
                 this.logger.info(`Handling spine toc attribute issue`);
@@ -111,6 +114,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('value of attribute "http-equiv" is invalid') ||
                        issue.message.includes('http-equiv=\'content-type\' must have the value "text/html; charset=utf-8"') ||
@@ -121,6 +125,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('value of attribute "role" is invalid')) {
                 this.logger.info(`Handling role attribute issue`);
@@ -129,6 +134,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('attribute "xsi:type" not allowed')) {
                 this.logger.info(`Handling xsi:type attribute issue`);
@@ -137,6 +143,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('attribute "opf:role" not allowed')) {
                 this.logger.info(`Handling opf:role attribute issue`);
@@ -145,6 +152,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('remote resource reference is not allowed') ||
                        issue.code === 'RSC-006') {
@@ -154,6 +162,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else if (issue.message.includes('property "remote-resources" should be declared') ||
                        issue.code === 'OPF-014') {
@@ -163,6 +172,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     fixApplied = true;
                     fixDescription = result.message;
                     if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
                 }
             } else {
                 this.logger.info(`No handler found for this validation structure issue`);
@@ -173,7 +183,7 @@ export class ValidationStructureFixer extends BaseFixer {
                     true,
                     fixDescription,
                     changedFiles,
-                    { issueType: issue.code }
+                    { issueType: issue.code, fixDetails }
                 );
             } else {
                 return this.createFixResult(
@@ -210,6 +220,7 @@ export class ValidationStructureFixer extends BaseFixer {
 
         const $ = this.loadDocument(opfContent);
         let fixed = false;
+        const fixDetails: FixDetail[] = [];
 
         // Find and fix dcterms:modified elements with invalid format
         $('meta[property="dcterms:modified"]').each((_, element) => {
@@ -218,17 +229,40 @@ export class ValidationStructureFixer extends BaseFixer {
             
             // Check if it's not in the required EPUB format: CCYY-MM-DDThh:mm:ssZ
             if (currentValue && !this.isValidEpubTimestamp(currentValue)) {
+                const originalHtml = $.html($element);
                 // Convert to valid EPUB timestamp format
                 const validDate = this.convertToEpubTimestamp(currentValue);
                 if (validDate) {
                     $element.text(validDate);
                     fixed = true;
+                    const fixedHtml = $.html($element);
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Fixed dcterms:modified format: "${currentValue}" -> "${validDate}"`,
+                        element: 'meta',
+                        attribute: 'property',
+                        oldValue: currentValue,
+                        newValue: validDate
+                    });
                     this.logger.info(`Fixed dcterms:modified format: "${currentValue}" -> "${validDate}"`);
                 } else {
                     // Use current timestamp as fallback in proper format
                     const currentTimestamp = this.getCurrentEpubTimestamp();
                     $element.text(currentTimestamp);
                     fixed = true;
+                    const fixedHtml = $.html($element);
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Replaced invalid dcterms:modified with current timestamp: "${currentTimestamp}"`,
+                        element: 'meta',
+                        attribute: 'property',
+                        oldValue: currentValue,
+                        newValue: currentTimestamp
+                    });
                     this.logger.info(`Replaced invalid dcterms:modified with current timestamp: "${currentTimestamp}"`);
                 }
             }
@@ -239,7 +273,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 'Fixed dcterms:modified format to be EPUB compliant',
-                [opfPath]
+                [opfPath],
+                { fixDetails }
             );
         }
 
@@ -268,6 +303,7 @@ export class ValidationStructureFixer extends BaseFixer {
 
         const $ = this.loadDocument(opfContent);
         const dateElements = $('dc\\:date');
+        const fixDetails: FixDetail[] = [];
         
         if (dateElements.length === 0) {
             return this.createFixResult(false, 'No dc:date elements found');
@@ -297,7 +333,19 @@ export class ValidationStructureFixer extends BaseFixer {
                 this.logger.info(`Keeping first dc:date: "${dateValue}"`);
             } else {
                 this.logger.info(`Removing duplicate dc:date: "${dateValue}"`);
+                const originalHtml = $.html($element);
                 $element.remove();
+                const fixedHtml = ''; // Element was removed
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Removed duplicate dc:date: "${dateValue}"`,
+                    element: 'dc:date',
+                    attribute: undefined,
+                    oldValue: dateValue,
+                    newValue: undefined
+                });
             }
         });
 
@@ -308,6 +356,16 @@ export class ValidationStructureFixer extends BaseFixer {
                 // Remove from current position and append to metadata in correct order
                 keptDateElement.remove();
                 metadata.append(keptDateElement);
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: undefined,
+                    fixedContent: $.html(keptDateElement),
+                    explanation: `Repositioned dc:date element in metadata section`,
+                    element: 'dc:date',
+                    attribute: undefined,
+                    oldValue: undefined,
+                    newValue: keptDateValue
+                });
             }
         }
 
@@ -315,7 +373,8 @@ export class ValidationStructureFixer extends BaseFixer {
         return this.createFixResult(
             true,
             `Consolidated ${dateElements.length} dc:date elements to 1 and repositioned`,
-            [opfPath]
+            [opfPath],
+            { fixDetails }
         );
     }
 
@@ -340,6 +399,7 @@ export class ValidationStructureFixer extends BaseFixer {
         }
 
         const $ = this.loadDocument(opfContent);
+        const fixDetails: FixDetail[] = [];
         
         // Check if NCX file exists in manifest
         const ncxItem = $('manifest item[media-type="application/x-dtbncx+xml"]');
@@ -360,14 +420,27 @@ export class ValidationStructureFixer extends BaseFixer {
         if (ncxItem.length > 0) {
             const ncxId = ncxItem.attr('id');
             if (ncxId) {
+                const originalHtml = $.html(spine);
                 spine.attr('toc', ncxId);
+                const fixedHtml = $.html(spine);
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added toc attribute to spine: "${ncxId}"`,
+                    element: 'spine',
+                    attribute: 'toc',
+                    oldValue: undefined,
+                    newValue: ncxId
+                });
                 this.logger.info(`Added toc attribute to spine: "${ncxId}"`);
                 
                 this.saveDocument($, opfContent);
                 return this.createFixResult(
                     true,
                     `Added toc attribute to spine element pointing to NCX file`,
-                    [opfPath]
+                    [opfPath],
+                    { fixDetails }
                 );
             } else {
                 // If NCX item has no ID, we need to add one
@@ -375,15 +448,42 @@ export class ValidationStructureFixer extends BaseFixer {
                 if (ncxHref) {
                     // Generate ID based on href
                     const ncxId = 'ncx-' + ncxHref.replace(/[^a-zA-Z0-9]/g, '-');
+                    const originalNcxHtml = $.html(ncxItem);
                     ncxItem.attr('id', ncxId);
+                    const fixedNcxHtml = $.html(ncxItem);
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: originalNcxHtml,
+                        fixedContent: fixedNcxHtml,
+                        explanation: `Added ID to NCX item: "${ncxId}"`,
+                        element: 'item',
+                        attribute: 'id',
+                        oldValue: undefined,
+                        newValue: ncxId
+                    });
+                    
+                    const originalSpineHtml = $.html(spine);
                     spine.attr('toc', ncxId);
+                    const fixedSpineHtml = $.html(spine);
+                    fixDetails.push({
+                        filePath: opfPath,
+                        originalContent: originalSpineHtml,
+                        fixedContent: fixedSpineHtml,
+                        explanation: `Added toc attribute to spine: "${ncxId}"`,
+                        element: 'spine',
+                        attribute: 'toc',
+                        oldValue: undefined,
+                        newValue: ncxId
+                    });
+                    
                     this.logger.info(`Added ID "${ncxId}" to NCX item and toc attribute to spine`);
                     
                     this.saveDocument($, opfContent);
                     return this.createFixResult(
                         true,
                         `Added ID to NCX item and toc attribute to spine element`,
-                        [opfPath]
+                        [opfPath],
+                        { fixDetails }
                     );
                 }
             }
@@ -419,6 +519,7 @@ export class ValidationStructureFixer extends BaseFixer {
      */
     private async fixInvalidHttpEquiv(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
         const changedFiles: string[] = [];
+        const fixDetails: FixDetail[] = [];
         let totalFixed = 0;
 
         // If issue specifies a file, fix only that file
@@ -427,10 +528,11 @@ export class ValidationStructureFixer extends BaseFixer {
             const content = this.findContentByPath(context, issue.location.file);
             if (content) {
                 this.logger.info(`Found content for file: ${content.path}`);
-                const fixed = await this.fixHttpEquivInFile(content);
+                const { fixed, details } = await this.fixHttpEquivInFile(content);
                 if (fixed) {
                     changedFiles.push(content.path);
                     totalFixed++;
+                    fixDetails.push(...details);
                 }
             } else {
                 this.logger.warn(`Could not find content for file: ${issue.location.file}`);
@@ -443,10 +545,11 @@ export class ValidationStructureFixer extends BaseFixer {
                     const isTargetFile = issue.location.file && content.path.includes(issue.location.file);
                                 
                     if (isHtmlFile || isTargetFile) {
-                        const fixed = await this.fixHttpEquivInFile(content);
+                        const { fixed, details } = await this.fixHttpEquivInFile(content);
                         if (fixed) {
                             changedFiles.push(content.path);
                             totalFixed++;
+                            fixDetails.push(...details);
                         }
                     }
                 }
@@ -455,10 +558,11 @@ export class ValidationStructureFixer extends BaseFixer {
             // Fix all HTML content files
             const contentFiles = this.getAllContentFiles(context);
             for (const content of contentFiles) {
-                const fixed = await this.fixHttpEquivInFile(content);
+                const { fixed, details } = await this.fixHttpEquivInFile(content);
                 if (fixed) {
                     changedFiles.push(content.path);
                     totalFixed++;
+                    fixDetails.push(...details);
                 }
             }
         }
@@ -467,7 +571,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 `Fixed invalid http-equiv attributes in ${totalFixed} files`,
-                changedFiles
+                changedFiles,
+                { filesFixed: totalFixed, fixDetails }
             );
         }
 
@@ -479,6 +584,7 @@ export class ValidationStructureFixer extends BaseFixer {
      */
     private async fixInvalidRole(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
         const changedFiles: string[] = [];
+        const fixDetails: FixDetail[] = [];
         let totalFixed = 0;
 
         // If issue specifies a file, fix only that file
@@ -487,20 +593,22 @@ export class ValidationStructureFixer extends BaseFixer {
             const content = this.findContentByPath(context, issue.location.file);
             if (content) {
                 this.logger.info(`Found content for role fix: ${content.path}`);
-                const fixed = await this.fixInvalidRoleInFile(content);
+                const { fixed, details } = await this.fixInvalidRoleInFile(content);
                 if (fixed) {
                     changedFiles.push(content.path);
                     totalFixed++;
+                    fixDetails.push(...details);
                 }
             } else {
                 this.logger.warn(`Could not find content for role fix: ${issue.location.file}`);
                 // Try to find nav.xhtml as fallback
                 for (const [path, content] of context.contents) {
                     if (path.includes('nav.xhtml')) {
-                        const fixed = await this.fixInvalidRoleInFile(content);
+                        const { fixed, details } = await this.fixInvalidRoleInFile(content);
                         if (fixed) {
                             changedFiles.push(content.path);
                             totalFixed++;
+                            fixDetails.push(...details);
                         }
                     }
                 }
@@ -509,10 +617,11 @@ export class ValidationStructureFixer extends BaseFixer {
             // Fix all HTML content files
             const contentFiles = this.getAllContentFiles(context);
             for (const content of contentFiles) {
-                const fixed = await this.fixInvalidRoleInFile(content);
+                const { fixed, details } = await this.fixInvalidRoleInFile(content);
                 if (fixed) {
                     changedFiles.push(content.path);
                     totalFixed++;
+                    fixDetails.push(...details);
                 }
             }
         }
@@ -521,7 +630,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 `Fixed invalid role attributes in ${totalFixed} files`,
-                changedFiles
+                changedFiles,
+                { filesFixed: totalFixed, fixDetails }
             );
         }
 
@@ -531,11 +641,12 @@ export class ValidationStructureFixer extends BaseFixer {
     /**
      * Fix http-equiv attributes in a single file
      */
-    private async fixHttpEquivInFile(content: EpubContent): Promise<boolean> {
+    private async fixHttpEquivInFile(content: EpubContent): Promise<{ fixed: boolean; details: FixDetail[] }> {
         this.logger.info(`Processing http-equiv fix for file: ${content.path}`);
         const $ = this.loadDocument(content);
         let fixed = false;
         let issuesFound = false;
+        const fixDetails: FixDetail[] = [];
 
         // Find meta elements with http-equiv attributes
         $('meta[http-equiv]').each((_, element) => {
@@ -554,8 +665,20 @@ export class ValidationStructureFixer extends BaseFixer {
                 
                 if (!isValid) {
                     // Invalid http-equiv value, remove the entire meta tag since it's not valid
+                    const originalHtml = $.html($element);
                     $element.remove();
                     fixed = true;
+                    const fixedHtml = ''; // Element was removed
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed meta tag with invalid http-equiv="${httpEquiv}"`,
+                        element: 'meta',
+                        attribute: 'http-equiv',
+                        oldValue: httpEquiv,
+                        newValue: undefined
+                    });
                     this.logger.info(`Removed meta tag with invalid http-equiv="${httpEquiv}" in ${content.path}`);
                 } else {
                     // Valid http-equiv, but fix case if needed
@@ -568,8 +691,20 @@ export class ValidationStructureFixer extends BaseFixer {
                     ];
                     const correctCase = validValues.find(valid => valid.toLowerCase() === httpEquiv.toLowerCase());
                     if (correctCase && correctCase !== httpEquiv) {
+                        const originalHtml = $.html($element);
                         $element.attr('http-equiv', correctCase);
                         fixed = true;
+                        const fixedHtml = $.html($element);
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Fixed case of http-equiv from "${httpEquiv}" to "${correctCase}"`,
+                            element: 'meta',
+                            attribute: 'http-equiv',
+                            oldValue: httpEquiv,
+                            newValue: correctCase
+                        });
                         this.logger.info(`Fixed case of http-equiv from "${httpEquiv}" to "${correctCase}" in ${content.path}`);
                     }
                     
@@ -580,8 +715,20 @@ export class ValidationStructureFixer extends BaseFixer {
                     if (lowerHttpEquiv === 'content-type') {
                         // Special handling for content-type - must be exactly "text/html; charset=utf-8"
                         if (contentAttr !== 'text/html; charset=utf-8') {
+                            const originalHtml = $.html($element);
                             $element.attr('content', 'text/html; charset=utf-8');
                             fixed = true;
+                            const fixedHtml = $.html($element);
+                            fixDetails.push({
+                                filePath: content.path,
+                                originalContent: originalHtml,
+                                fixedContent: fixedHtml,
+                                explanation: `Fixed content attribute for content-type: "${contentAttr}" -> "text/html; charset=utf-8"`,
+                                element: 'meta',
+                                attribute: 'content',
+                                oldValue: contentAttr,
+                                newValue: 'text/html; charset=utf-8'
+                            });
                             this.logger.info(`Fixed content attribute for content-type: "${contentAttr}" -> "text/html; charset=utf-8" in ${content.path}`);
                         }
                     } else if (!contentAttr) {
@@ -589,12 +736,36 @@ export class ValidationStructureFixer extends BaseFixer {
                         if (lowerHttpEquiv === 'refresh') {
                             // Refresh should have a value like "5; url=http://example.com"
                             // If missing, we should remove it as it's not properly configured
+                            const originalHtml = $.html($element);
                             $element.remove();
                             fixed = true;
+                            const fixedHtml = ''; // Element was removed
+                            fixDetails.push({
+                                filePath: content.path,
+                                originalContent: originalHtml,
+                                fixedContent: fixedHtml,
+                                explanation: `Removed meta element with http-equiv="${httpEquiv}" due to missing content attribute`,
+                                element: 'meta',
+                                attribute: 'http-equiv',
+                                oldValue: httpEquiv,
+                                newValue: undefined
+                            });
                             this.logger.info(`Removed meta element with http-equiv="${httpEquiv}" due to missing content attribute in ${content.path}`);
                         } else if (lowerHttpEquiv === 'x-ua-compatible') {
+                            const originalHtml = $.html($element);
                             $element.attr('content', 'IE=edge');
                             fixed = true;
+                            const fixedHtml = $.html($element);
+                            fixDetails.push({
+                                filePath: content.path,
+                                originalContent: originalHtml,
+                                fixedContent: fixedHtml,
+                                explanation: `Added content="IE=edge" to meta element with http-equiv="${httpEquiv}"`,
+                                element: 'meta',
+                                attribute: 'content',
+                                oldValue: contentAttr,
+                                newValue: 'IE=edge'
+                            });
                             this.logger.info(`Added content="IE=edge" to meta element with http-equiv="${httpEquiv}" in ${content.path}`);
                         }
                     }
@@ -616,13 +787,37 @@ export class ValidationStructureFixer extends BaseFixer {
                 const contentAttr = $element.attr('content');
                 if (contentAttr) {
                     // Remove the invalid meta element
+                    const originalHtml = $.html($element);
                     $element.remove();
                     fixed = true;
+                    const fixedHtml = ''; // Element was removed
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed invalid meta element with content="${contentAttr}"`,
+                        element: 'meta',
+                        attribute: 'content',
+                        oldValue: contentAttr,
+                        newValue: undefined
+                    });
                     this.logger.info(`Removed invalid meta element with content="${contentAttr}" in ${content.path}`);
                 } else {
                     // Completely invalid meta element, remove it
+                    const originalHtml = $.html($element);
                     $element.remove();
                     fixed = true;
+                    const fixedHtml = ''; // Element was removed
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed completely invalid meta element`,
+                        element: 'meta',
+                        attribute: undefined,
+                        oldValue: undefined,
+                        newValue: undefined
+                    });
                     this.logger.info(`Removed completely invalid meta element in ${content.path}`);
                 }
             }
@@ -640,8 +835,20 @@ export class ValidationStructureFixer extends BaseFixer {
                 const isValid = this.isValidHttpEquiv(httpEquiv);
                 
                 if (!isValid) {
+                    const originalHtml = $.html($element);
                     $element.remove();
                     fixed = true;
+                    const fixedHtml = ''; // Element was removed
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed meta tag with invalid http-equiv="${httpEquiv}" (secondary check)`,
+                        element: 'meta',
+                        attribute: 'http-equiv',
+                        oldValue: httpEquiv,
+                        newValue: undefined
+                    });
                     this.logger.info(`Removed meta tag with invalid http-equiv="${httpEquiv}" in ${content.path} (secondary check)`);
                 }
             }
@@ -656,15 +863,16 @@ export class ValidationStructureFixer extends BaseFixer {
             this.logger.info(`No http-equiv issues found in ${content.path}`);
         }
 
-        return fixed;
+        return { fixed, details: fixDetails };
     }
 
     /**
      * Fix invalid role attributes in a single file
      */
-    private async fixInvalidRoleInFile(content: EpubContent): Promise<boolean> {
+    private async fixInvalidRoleInFile(content: EpubContent): Promise<{ fixed: boolean; details: FixDetail[] }> {
         const $ = this.loadDocument(content);
         let fixed = false;
+        const fixDetails: FixDetail[] = [];
 
         // Find elements with invalid role values
         $('[role]').each((_, element) => {
@@ -677,8 +885,20 @@ export class ValidationStructureFixer extends BaseFixer {
                 if (tagName === 'nav') {
                     if (!this.isValidNavRole(role)) {
                         // For nav elements, use valid navigation role
+                        const originalHtml = $.html($element);
                         $element.attr('role', 'navigation');
                         fixed = true;
+                        const fixedHtml = $.html($element);
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Fixed invalid role="${role}" to role="navigation" in nav element`,
+                            element: 'nav',
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: 'navigation'
+                        });
                         this.logger.info(`Fixed invalid role="${role}" to role="navigation" in nav element in ${content.path}`);
                     }
                 } 
@@ -692,8 +912,20 @@ export class ValidationStructureFixer extends BaseFixer {
                     
                     if (clearlyInvalidRoles.some(invalid => role.toLowerCase().includes(invalid))) {
                         // For clearly invalid roles, remove them
+                        const originalHtml = $.html($element);
                         $element.removeAttr('role');
                         fixed = true;
+                        const fixedHtml = $.html($element);
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Removed clearly invalid role="${role}" from ${tagName} element`,
+                            element: tagName,
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: undefined
+                        });
                         this.logger.info(`Removed clearly invalid role="${role}" from ${tagName} element in ${content.path}`);
                     } else {
                         // For uncertain cases, leave as is to avoid breaking valid content
@@ -707,7 +939,7 @@ export class ValidationStructureFixer extends BaseFixer {
             this.saveDocument($, content);
         }
 
-        return fixed;
+        return { fixed, details: fixDetails };
     }
 
     /**
@@ -733,14 +965,27 @@ export class ValidationStructureFixer extends BaseFixer {
         const $ = this.loadDocument(opfContent);
         let fixed = false;
         let removedCount = 0;
+        const fixDetails: FixDetail[] = [];
 
         // Remove xsi:type attributes from dc:language and other Dublin Core elements
         $('dc\\:language[xsi\\:type], language[xsi\\:type]').each((_, element) => {
             const $element = $(element);
             const type = $element.attr('xsi:type');
+            const originalHtml = $.html($element);
             $element.removeAttr('xsi:type');
+            const fixedHtml = $.html($element);
             fixed = true;
             removedCount++;
+            fixDetails.push({
+                filePath: opfPath,
+                originalContent: originalHtml,
+                fixedContent: fixedHtml,
+                explanation: `Removed xsi:type="${type}" from language element`,
+                element: 'dc:language',
+                attribute: 'xsi:type',
+                oldValue: type,
+                newValue: undefined
+            });
             this.logger.info(`Removed xsi:type="${type}" from language element in ${opfPath}`);
         });
 
@@ -749,9 +994,21 @@ export class ValidationStructureFixer extends BaseFixer {
             const $element = $(element);
             const type = $element.attr('xsi:type');
             const tagName = element.tagName || 'unknown';
+            const originalHtml = $.html($element);
             $element.removeAttr('xsi:type');
+            const fixedHtml = $.html($element);
             fixed = true;
             removedCount++;
+            fixDetails.push({
+                filePath: opfPath,
+                originalContent: originalHtml,
+                fixedContent: fixedHtml,
+                explanation: `Removed xsi:type="${type}" from ${tagName} element`,
+                element: tagName,
+                attribute: 'xsi:type',
+                oldValue: type,
+                newValue: undefined
+            });
             this.logger.info(`Removed xsi:type="${type}" from ${tagName} element in ${opfPath}`);
         });
 
@@ -768,9 +1025,21 @@ export class ValidationStructureFixer extends BaseFixer {
             }
             // Only remove if it's a Dublin Core element or clearly an EPUB 2.0 attribute
             if (tagName.startsWith('dc:') || tagName === 'language' || tagName === 'identifier' || tagName === 'date') {
+                const originalHtml = $.html($element);
                 $element.removeAttr('xsi:type');
+                const fixedHtml = $.html($element);
                 fixed = true;
                 removedCount++;
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Removed xsi:type="${type}" from ${tagName} element (secondary check)`,
+                    element: tagName,
+                    attribute: 'xsi:type',
+                    oldValue: type,
+                    newValue: undefined
+                });
                 this.logger.info(`Removed xsi:type="${type}" from ${tagName} element (secondary check) in ${opfPath}`);
             }
         });
@@ -780,7 +1049,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 `Removed ${removedCount} EPUB 2.0 xsi:type attributes`,
-                [opfPath]
+                [opfPath],
+                { fixDetails }
             );
         }
 
@@ -809,14 +1079,28 @@ export class ValidationStructureFixer extends BaseFixer {
 
         const $ = this.loadDocument(opfContent);
         let fixed = false;
+        const fixDetails: FixDetail[] = [];
 
         // Remove opf:role attributes from metadata elements
         $('metadata [opf\\:role]').each((_, element) => {
             const $element = $(element);
             const role = $element.attr('opf:role');
+            const originalHtml = $.html($element);
             $element.removeAttr('opf:role');
+            const fixedHtml = $.html($element);
             fixed = true;
             this.logger.info(`Removed opf:role="${role}" attribute from metadata element in ${opfPath}`);
+            
+            fixDetails.push({
+                filePath: opfPath,
+                originalContent: originalHtml,
+                fixedContent: fixedHtml,
+                explanation: `Removed opf:role="${role}" attribute from metadata element`,
+                element: $element.prop('tagName')?.toLowerCase() || 'element',
+                attribute: 'opf:role',
+                oldValue: role,
+                newValue: undefined
+            });
             
             // If this is a creator or contributor element, we might want to convert to the proper EPUB 3 format
             const tagName = $element.prop('tagName')?.toLowerCase();
@@ -829,6 +1113,17 @@ export class ValidationStructureFixer extends BaseFixer {
                     .text(role);
                 $element.after(metaElement);
                 this.logger.info(`Added EPUB 3 role meta element for ${tagName} with role="${role}"`);
+                
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: undefined,
+                    fixedContent: $.html(metaElement),
+                    explanation: `Added EPUB 3 role meta element for ${tagName} with role="${role}"`,
+                    element: 'meta',
+                    attribute: 'property',
+                    oldValue: undefined,
+                    newValue: 'role'
+                });
             }
         });
 
@@ -837,7 +1132,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 'Fixed opf:role attributes in OPF file',
-                [opfPath]
+                [opfPath],
+                { fixDetails }
             );
         }
 
@@ -880,6 +1176,7 @@ export class ValidationStructureFixer extends BaseFixer {
 
         const $ = this.loadDocument(opfContent);
         let fixed = false;
+        const fixDetails: FixDetail[] = [];
 
         // Find the first item in manifest that has an HTML file
         const firstHtmlItem = $('manifest item[media-type="application/xhtml+xml"]').first();
@@ -887,13 +1184,26 @@ export class ValidationStructureFixer extends BaseFixer {
         if (firstHtmlItem.length > 0) {
             // Add remote-resources property to the first HTML item
             const currentProperties = firstHtmlItem.attr('properties') || '';
+            const originalHtml = $.html(firstHtmlItem);
             if (!currentProperties.includes('remote-resources')) {
                 const newProperties = currentProperties ? 
                     `${currentProperties} remote-resources` : 
                     'remote-resources';
                 firstHtmlItem.attr('properties', newProperties);
                 fixed = true;
+                const fixedHtml = $.html(firstHtmlItem);
                 this.logger.info(`Added remote-resources property to item in manifest in ${opfPath}`);
+                
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Added remote-resources property to manifest item`,
+                    element: 'item',
+                    attribute: 'properties',
+                    oldValue: currentProperties || undefined,
+                    newValue: newProperties
+                });
             }
         }
 
@@ -902,7 +1212,8 @@ export class ValidationStructureFixer extends BaseFixer {
             return this.createFixResult(
                 true,
                 'Added remote-resources property to OPF manifest',
-                [opfPath]
+                [opfPath],
+                { fixDetails }
             );
         }
 
