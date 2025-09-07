@@ -69,3 +69,7 @@ ace/
 # Test files
 test-epubs/
 sample-epubs/
+
+# Test report output directories
+test-epub-lang_ace_report_*/
+epubcheck.txt
