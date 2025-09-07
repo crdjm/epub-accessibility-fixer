@@ -59,6 +59,8 @@ export class HeadingStructureFixer extends BaseFixer {
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
         this.logger.info(`Fixing heading structure: ${issue.message}`);
+        this.logger.info(`Issue location: ${JSON.stringify(issue.location)}`);
+        this.logger.info(`Issue code: ${issue.code}`);
 
         try {
             const changedFiles: string[] = [];
@@ -67,18 +69,28 @@ export class HeadingStructureFixer extends BaseFixer {
 
             // If issue specifies a file, fix only that file
             if (issue.location?.file) {
+                this.logger.info(`Looking for content file: ${issue.location.file}`);
                 const content = this.findContentByPath(context, issue.location.file);
                 if (content) {
+                    this.logger.info(`Found content file: ${content.path}`);
                     const { fixed, details } = await this.fixHeadingStructureInFile(content);
+                    this.logger.info(`Fixed ${fixed} issues in file: ${content.path}`);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
                         fixDetails.push(...details);
                     }
+                } else {
+                    this.logger.warn(`Content file not found: ${issue.location.file}`);
+                    return this.createFixResult(
+                        false,
+                        `Content file not found: ${issue.location.file}`
+                    );
                 }
             } else {
                 // Fix all content files
                 const contentFiles = this.getAllContentFiles(context);
+                this.logger.info(`Found ${contentFiles.length} content files to process`);
 
                 for (const content of contentFiles) {
                     const { fixed, details } = await this.fixHeadingStructureInFile(content);
@@ -98,6 +110,7 @@ export class HeadingStructureFixer extends BaseFixer {
                     { changesApplied: totalFixed, fixDetails }
                 );
             } else {
+                this.logger.warn(`No heading structure issues found to fix. Total fixed: ${totalFixed}, Changed files: ${changedFiles.length}`);
                 return this.createFixResult(
                     false,
                     'No heading structure issues found to fix'
@@ -111,6 +124,7 @@ export class HeadingStructureFixer extends BaseFixer {
     }
 
     private async fixHeadingStructureInFile(content: EpubContent): Promise<{ fixed: number; details: FixDetail[] }> {
+        this.logger.info(`Processing file: ${content.path}`);
         const $ = this.loadDocument(content);
         let fixedCount = 0;
         const fixDetails: FixDetail[] = [];
@@ -124,18 +138,24 @@ export class HeadingStructureFixer extends BaseFixer {
             headings.push({ element: headingElement, level, text });
         });
 
-        if (headings.length === 0) {
-            return { fixed: 0, details: fixDetails };
-        }
+        this.logger.info(`Found ${headings.length} headings in file: ${content.path}`);
 
         // Fix empty headings
+        let emptyHeadingsFixed = 0;
         for (const heading of headings) {
-            if (!heading.text) {
+            if (!heading.text || heading.text.trim() === '') {
+                this.logger.info(`Found empty heading: ${heading.element.tagName} in file: ${content.path}`);
                 const $heading = $(heading.element);
+                // Add data attributes to identify this as an empty heading for later matching
+                $heading.attr('data-empty-heading', 'true');
+                $heading.attr('data-file-path', content.path);
+                // Use the line number from the element or default to 0
+                const lineNumber = heading.element.startIndex || 0;
+                $heading.attr('data-line', lineNumber.toString());
                 const originalHtml = $.html($heading);
                 const fixed = this.fixEmptyHeading($heading, $, content.path);
                 if (fixed) {
-                    fixedCount++;
+                    emptyHeadingsFixed++;
                     const fixedHtml = $.html($heading);
                     fixDetails.push({
                         filePath: content.path,
@@ -146,11 +166,19 @@ export class HeadingStructureFixer extends BaseFixer {
                         attribute: undefined,
                         oldValue: undefined,
                         newValue: $heading.text() || $heading.attr('aria-label'),
-                        issueCode: 'heading-order',  // Add issue code
-                        selector: `${heading.element.tagName}:contains('${heading.text}')`  // Add selector
+                        issueCode: 'empty-heading',  // Preserve the original issue code
+                        selector: `${heading.element.tagName}[data-empty-heading][data-file-path='${content.path}'][data-line='${lineNumber}']`  // Add selector for empty headings with file path and line
                     });
                 }
             }
+        }
+
+        this.logger.info(`Fixed ${emptyHeadingsFixed} empty headings in file: ${content.path}`);
+
+        // If there are no headings at all, we're done
+        if (headings.length === 0) {
+            this.logger.info(`No headings found in file: ${content.path}`);
+            return { fixed: 0, details: fixDetails };
         }
 
         // Check if first heading should be h1
@@ -216,10 +244,13 @@ export class HeadingStructureFixer extends BaseFixer {
         // Ensure proper nesting within sections
         this.fixHeadingNesting($, headings, content.path, fixDetails);
 
+        fixedCount += emptyHeadingsFixed;
+
         if (fixedCount > 0) {
             this.saveDocument($, content);
         }
 
+        this.logger.info(`Total fixed count for file ${content.path}: ${fixedCount}`);
         return { fixed: fixedCount, details: fixDetails };
     }
 
@@ -234,6 +265,8 @@ export class HeadingStructureFixer extends BaseFixer {
         const generatedText = this.generateHeadingTextFromContext($heading, $, className, id);
         if (generatedText) {
             $heading.text(generatedText);
+            $heading.removeAttr('data-empty-heading'); // Remove the marker since it's no longer empty
+            $heading.removeAttr('data-file-path'); // Remove the file path marker
             this.logger.info(`Added generated text to empty heading: "${generatedText}"`);
             return true;
         }
@@ -244,6 +277,8 @@ export class HeadingStructureFixer extends BaseFixer {
             $heading.attr('aria-label', ariaLabelText);
             $heading.attr('role', 'heading');
             $heading.attr('aria-level', tagName?.charAt(1) || '1');
+            $heading.removeAttr('data-empty-heading'); // Remove the marker since it's no longer empty
+            $heading.removeAttr('data-file-path'); // Remove the file path marker
             this.logger.info(`Added aria-label to empty heading: "${ariaLabelText}"`);
             return true;
         }
@@ -261,6 +296,8 @@ export class HeadingStructureFixer extends BaseFixer {
         // Only apply this fix if it doesn't already have aria-hidden
         if (!$heading.attr('aria-hidden')) {
             $heading.attr('aria-hidden', 'true');
+            $heading.removeAttr('data-empty-heading'); // Remove the marker since it's hidden
+            $heading.removeAttr('data-file-path'); // Remove the file path marker
             this.logger.info(`Hid empty heading from screen readers but kept in DOM`);
             return true;
         }

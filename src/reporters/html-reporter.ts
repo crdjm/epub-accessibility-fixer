@@ -544,8 +544,23 @@ export class HtmlReportGenerator {
                             return true;
                         }
                         // For heading issues, check if the selector indicates a heading element
-                        if ((issue.code === 'heading-order' || issue.code === 'heading-structure') && 
+                        if ((issue.code === 'heading-order' || issue.code === 'heading-structure' || issue.code === 'empty-heading') && 
                             detail.selector.match(/h[1-6]/)) {
+                            // For empty-heading issues, check for the special data attribute, file path, and line number
+                            if (issue.code === 'empty-heading' && detail.selector.includes('[data-empty-heading]')) {
+                                // Check if the file path matches
+                                if (detail.selector.includes(`[data-file-path='${issue.location?.file}']`)) {
+                                    // For empty-heading issues, we need to match the specific heading element
+                                    // Check if we have a line number in the issue location
+                                    if (issue.location?.line && detail.selector.includes(`[data-line='${issue.location.line}']`)) {
+                                        return true;
+                                    }
+                                    // Fallback for backward compatibility - match by file path only
+                                    return true;
+                                }
+                                // Fallback for backward compatibility
+                                return true;
+                            }
                             // For heading-order issues, try to match the specific heading text
                             // Extract heading text from the issue message if available
                             const headingTextMatch = issue.message.match(/"([^"]+)"/);
@@ -635,7 +650,25 @@ export class HtmlReportGenerator {
             }
             
             // For heading-order issues, show only one fix detail since we can't match specific headings
-            if (issue.code === 'heading-order' || issue.code === 'heading-structure') {
+            // But for empty-heading issues, show all individual fixes
+            if (issue.code === 'empty-heading') {
+                // For empty-heading issues, show all individual fixes
+                // But filter to only show the ones that match this specific issue
+                const filteredDetails = allRelevantDetails.filter(detail => {
+                    // If we have line number information in the issue, use it for matching
+                    if (issue.location?.line && detail.selector?.includes(`[data-line='${issue.location.line}']`)) {
+                        return true;
+                    }
+                    // If we don't have line number, but have the data attributes, it's a match
+                    if (detail.selector?.includes('[data-empty-heading]') && 
+                        detail.selector?.includes(`[data-file-path='${issue.location?.file}']`)) {
+                        return true;
+                    }
+                    // Fallback for backward compatibility
+                    return detail.issueCode === 'empty-heading';
+                });
+                return filteredDetails.length > 0 ? filteredDetails : allRelevantDetails;
+            } else if (issue.code === 'heading-order' || issue.code === 'heading-structure') {
                 return [allRelevantDetails[0]];
             }
             

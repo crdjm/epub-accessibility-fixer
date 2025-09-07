@@ -284,6 +284,25 @@ export class FixerOrchestrator {
                 this.logger.info(`Marked OPF-096 issue as fixed: ${issue.message}`);
             });
         }
+        // Special handling for empty-heading issues
+        // These issues should be handled individually, not marked as fixed in bulk
+        else if (fixedIssue.code === 'empty-heading' && 
+                 fixerForThisIssue.getFixerName() === 'Heading Structure Fixer') {
+            // When the heading structure fixer successfully fixes issues in a file,
+            // mark all empty-heading issues in that same file as fixed
+            this.logger.info('Processing empty-heading issues individually by file');
+            
+            const sameFileEmptyHeadingIssues = context.issues.filter(issue =>
+                !issue.fixed &&
+                issue.code === 'empty-heading' &&
+                issue.location?.file === fixedIssue.location?.file
+            );
+
+            sameFileEmptyHeadingIssues.forEach(issue => {
+                issue.fixed = true;
+                this.logger.info(`Marked empty-heading issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+            });
+        }
         else {
             // For other non-accessibility-metadata issues, mark similar issues in the same file as fixed
             if (fixedIssue.location?.file) {
