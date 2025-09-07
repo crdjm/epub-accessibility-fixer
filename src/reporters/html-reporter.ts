@@ -387,6 +387,24 @@ export class HtmlReportGenerator {
             }
         }
 
+        // Add special note for OPF-014 issues
+        let specialNoteHtml = '';
+        if (issue.code === 'OPF-014') {
+            specialNoteHtml = `
+            <div class="special-note">
+                <strong>Note:</strong> This issue indicates that the EPUB contains remote resources (like images or scripts hosted online). 
+                Automatically downloading and embedding these resources is not performed by this tool as it may violate terms of service, 
+                consume significant bandwidth, or alter the intended content. To fix this manually:
+                <ul>
+                    <li>Download the remote resources to your local machine</li>
+                    <li>Add them to the EPUB package</li>
+                    <li>Update all references to use local paths instead of URLs</li>
+                    <li>Add the "remote-resources" property to the relevant manifest items</li>
+                </ul>
+            </div>
+            `;
+        }
+
         return `
     <div class="issue-item ${priority} ${issue.fixed ? 'fixed' : ''}">
         <div class="issue-header">
@@ -409,6 +427,7 @@ export class HtmlReportGenerator {
         </div>
         ` : ''}
         ${issue.details ? `<div class="issue-details">${issue.details}</div>` : ''}
+        ${specialNoteHtml}
         ${fixDetailsHtml}
     </div>`;
     }
@@ -543,7 +562,7 @@ export class HtmlReportGenerator {
                         }
                         // For language issues, check if the selector indicates html or body elements
                         if ((issue.code === 'epub-lang' || issue.code === 'html-has-lang' || issue.code === 'missing-lang') && 
-                            (detail.selector.includes('html') || detail.selector.includes('body'))) {
+                            (detail.selector.includes('html') || detail.selector.includes('body') || detail.selector.includes('package'))) {
                             return true;
                         }
                     }
@@ -558,6 +577,25 @@ export class HtmlReportGenerator {
                         return detail.issueMessage.includes(issue.code) || 
                                issue.message.includes(detail.issueMessage) ||
                                detail.issueMessage.includes(issue.message);
+                    }
+                    
+                    // For epub-lang issues, be more specific about what fix details to show
+                    if (issue.code === 'epub-lang') {
+                        // Only show fix details related to language metadata
+                        const explanationLower = (detail.explanation || '').toLowerCase();
+                        return explanationLower.includes('language') && 
+                               (explanationLower.includes('metadata') || 
+                                explanationLower.includes('xml:lang') || 
+                                explanationLower.includes('dc:language'));
+                    }
+                    
+                    // For metadata issues, be more specific about what fix details to show
+                    if (issue.code.includes('metadata') || issue.code.includes('accessibility')) {
+                        // Only show fix details related to metadata
+                        const explanationLower = (detail.explanation || '').toLowerCase();
+                        return explanationLower.includes('metadata') || 
+                               explanationLower.includes('schema:') ||
+                               explanationLower.includes('accessibility');
                     }
                     
                     // If no specific issue information, match by file only (fallback)
@@ -585,7 +623,15 @@ export class HtmlReportGenerator {
             
             // For language-related issues, show only one fix detail
             if (issue.code === 'epub-lang' || issue.code === 'html-has-lang' || issue.code === 'missing-lang') {
-                return [allRelevantDetails[0]];
+                // Filter to only show language-related fix details
+                const languageDetails = allRelevantDetails.filter(detail => {
+                    const explanationLower = (detail.explanation || '').toLowerCase();
+                    return explanationLower.includes('language') && 
+                           (explanationLower.includes('metadata') || 
+                            explanationLower.includes('xml:lang') || 
+                            explanationLower.includes('dc:language'));
+                });
+                return languageDetails.length > 0 ? [languageDetails[0]] : [allRelevantDetails[0]];
             }
             
             // For heading-order issues, show only one fix detail since we can't match specific headings
@@ -616,6 +662,11 @@ export class HtmlReportGenerator {
                             return true;
                         }
                         if (issueCodeLower.includes('accessibilitysummary') && explanationLower.includes('accessibilitysummary')) {
+                            return true;
+                        }
+                        // For epub-lang, show language-related metadata fixes
+                        if (issueCodeLower === 'epub-lang' && 
+                            (explanationLower.includes('language') || explanationLower.includes('xml:lang') || explanationLower.includes('dc:language'))) {
                             return true;
                         }
                     }
@@ -774,6 +825,25 @@ export class HtmlReportGenerator {
         .issue-message { font-weight: 500; margin-bottom: 8px; }
         .issue-location { font-size: 0.9em; color: #666; font-family: monospace; }
         .issue-details { font-size: 0.9em; color: #666; margin-top: 8px; }
+        
+        .special-note {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #fff3cd;
+            border-left: 3px solid #ffc107;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        .special-note strong {
+            color: #856404;
+        }
+        .special-note ul {
+            margin: 8px 0 0 20px;
+            padding: 0;
+        }
+        .special-note li {
+            margin-bottom: 5px;
+        }
         
         .issue-fix-details { 
             margin-top: 10px; 
