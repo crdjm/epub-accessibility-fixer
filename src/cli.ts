@@ -144,8 +144,9 @@ program
     .description('CLI tool for analyzing and fixing EPUB accessibility issues')
     .version('1.0.0');
 
+// Make the input argument optional by using .argument() with square brackets
 program
-    .argument('<input>', 'Path to the EPUB file to analyze/fix')
+    .argument('[input]', 'Path to the EPUB file to analyze/fix')
     .option('-o, --output <path>', 'Output path for the fixed EPUB (defaults to input_fixed.epub)')
     .option('-r, --report <path>', 'Path for the HTML report (defaults to input_report.html)')
     .option('-a, --analyze-only', 'Only analyze, do not fix issues')
@@ -158,6 +159,12 @@ program
     .option('--use-gemini', 'Use Gemini AI models for alt text generation instead of Ollama')
     .option('-v, --verbose', 'Verbose output')
     .action(async (input: string, options: any) => {
+        // If no input is provided and no command is matched, show help
+        if (!input) {
+            program.help();
+            return;
+        }
+
         const spinner = ora();
 
         try {
@@ -538,6 +545,206 @@ process.on('unhandledRejection', (reason) => {
     console.error(chalk.red('\nUnhandled Rejection:'), reason);
     process.exit(1);
 });
+
+// Add new command to list EpubCheck fixable issues
+program
+    .command('list-epubcheck-fixes')
+    .description('List all EPUB structural issues that can be automatically fixed')
+    .action(() => {
+        console.log(chalk.blue.bold('EPUB Structural Issues (EpubCheck) That Can Be Automatically Fixed:'));
+        console.log(chalk.gray('===============================================================\n'));
+        
+        const fixes = [
+            {
+                code: 'RSC-005',
+                description: 'Structural validation errors including invalid attributes',
+                fixableIssues: [
+                    'Invalid http-equiv attributes in meta tags',
+                    'Invalid role attributes',
+                    'Invalid xsi:type attributes',
+                    'Invalid opf:role attributes',
+                    'Page-map attributes not allowed'
+                ]
+            },
+            {
+                code: 'OPF-014',
+                description: 'Missing remote-resources property for remote resource references',
+                fixableIssues: [
+                    'Adding remote-resources property to OPF manifest items'
+                ]
+            },
+            {
+                code: 'OPF-073',
+                description: 'DOCTYPE external identifiers issues',
+                fixableIssues: [
+                    'Removing external identifiers from DOCTYPE declarations'
+                ]
+            },
+            {
+                code: 'dcterms:modified',
+                description: 'Invalid dcterms:modified timestamp format',
+                fixableIssues: [
+                    'Converting timestamps to valid EPUB format (CCYY-MM-DDThh:mm:ssZ)'
+                ]
+            },
+            {
+                code: 'dc:date',
+                description: 'Multiple dc:date elements or invalid positioning',
+                fixableIssues: [
+                    'Consolidating multiple dc:date elements',
+                    'Repositioning dc:date elements in metadata'
+                ]
+            },
+            {
+                code: 'spine element toc attribute',
+                description: 'Missing toc attribute in spine element',
+                fixableIssues: [
+                    'Adding toc attribute pointing to NCX file',
+                    'Generating ID for NCX item if missing'
+                ]
+            }
+        ];
+
+        fixes.forEach((fix, index) => {
+            console.log(`${index + 1}. ${chalk.bold(fix.code)}: ${fix.description}`);
+            console.log(chalk.gray('   Fixable issues:'));
+            fix.fixableIssues.forEach(issue => {
+                console.log(chalk.gray('   • ') + issue);
+            });
+            console.log('');
+        });
+
+        console.log(chalk.blue.bold('\nNote: ') + chalk.gray('These fixes are applied automatically when running the tool in fix mode.'));
+    });
+
+// Add new command to list DAISY ACE fixable issues
+program
+    .command('list-ace-fixes')
+    .description('List all accessibility issues that can be automatically fixed')
+    .action(() => {
+        console.log(chalk.blue.bold('Accessibility Issues (DAISY ACE) That Can Be Automatically Fixed:'));
+        console.log(chalk.gray('===============================================================\n'));
+        
+        const fixes = [
+            {
+                code: 'image-alt',
+                description: 'Images missing alternative text',
+                fixableIssues: [
+                    'Adding descriptive alt text to images',
+                    'Adding empty alt text to decorative images',
+                    'AI-powered alt text generation with Ollama or Gemini'
+                ]
+            },
+            {
+                code: 'html-has-lang',
+                description: 'HTML documents missing language attributes',
+                fixableIssues: [
+                    'Adding lang attribute to html element',
+                    'Adding xml:lang attribute for XHTML documents'
+                ]
+            },
+            {
+                code: 'document-title',
+                description: 'Documents missing title elements',
+                fixableIssues: [
+                    'Adding meaningful title elements to documents'
+                ]
+            },
+            {
+                code: 'heading-order',
+                description: 'Incorrect heading structure and hierarchy',
+                fixableIssues: [
+                    'Fixing heading level gaps',
+                    'Promoting first heading to h1',
+                    'Adding missing headings',
+                    'Converting emphasized text to headings'
+                ]
+            },
+            {
+                code: 'empty-heading',
+                description: 'Headings with no visible text',
+                fixableIssues: [
+                    'Adding text content to empty headings',
+                    'Adding aria-label attributes',
+                    'Removing unnecessary empty headings'
+                ]
+            },
+            {
+                code: 'link-name',
+                description: 'Links without discernible text',
+                fixableIssues: [
+                    'Adding descriptive text to links',
+                    'Adding aria-label attributes',
+                    'Adding title attributes'
+                ]
+            },
+            {
+                code: 'link-in-text-block',
+                description: 'Links not distinguishable from surrounding text',
+                fixableIssues: [
+                    'Adding underline styling to links',
+                    'Improving color contrast',
+                    'Adding title attributes for context'
+                ]
+            },
+            {
+                code: 'color-contrast',
+                description: 'Insufficient color contrast',
+                fixableIssues: [
+                    'Adjusting text colors for better contrast',
+                    'Adding background colors to improve contrast'
+                ]
+            },
+            {
+                code: 'epub-type-has-matching-role',
+                description: 'EPUB type attributes without matching ARIA roles',
+                fixableIssues: [
+                    'Adding appropriate ARIA role attributes',
+                    'Mapping epub:type to ARIA roles'
+                ]
+            },
+            {
+                code: 'OPF-096',
+                description: 'Non-linear content not reachable',
+                fixableIssues: [
+                    'Adding navigation links to non-linear content',
+                    'Creating accessibility sections for non-linear items'
+                ]
+            },
+            {
+                code: 'landmark-unique',
+                description: 'Landmark elements without unique accessible names',
+                fixableIssues: [
+                    'Adding unique aria-label attributes',
+                    'Adding unique title attributes',
+                    'Ensuring landmark elements have distinguishable names'
+                ]
+            },
+            {
+                code: 'metadata-*',
+                description: 'Missing accessibility metadata',
+                fixableIssues: [
+                    'Adding schema:accessMode metadata',
+                    'Adding schema:accessModeSufficient metadata',
+                    'Adding schema:accessibilityFeature metadata',
+                    'Adding schema:accessibilityHazard metadata',
+                    'Adding schema:accessibilitySummary metadata'
+                ]
+            }
+        ];
+
+        fixes.forEach((fix, index) => {
+            console.log(`${index + 1}. ${chalk.bold(fix.code)}: ${fix.description}`);
+            console.log(chalk.gray('   Fixable issues:'));
+            fix.fixableIssues.forEach(issue => {
+                console.log(chalk.gray('   • ') + issue);
+            });
+            console.log('');
+        });
+
+        console.log(chalk.blue.bold('\nNote: ') + chalk.gray('These fixes are applied automatically when running the tool in fix mode.'));
+        console.log(chalk.blue.bold('AI-powered alt text generation: ') + chalk.gray('Use --use-gemini flag to use Gemini AI instead of Ollama.'));
+    });
 
 // Parse command line arguments
 program.parse();
