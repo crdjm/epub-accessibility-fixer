@@ -36,7 +36,8 @@ export class EpubTypeRoleFixer extends BaseFixer {
                              issue.message.includes('role matching') ||
                              issue.message.includes('matching role') ||
                              issue.message.includes('landmark') ||
-                             issue.message.includes('unique'));
+                             issue.message.includes('unique') ||
+                             issue.message.includes('epub-type-has-matching-role')); // Add this specific pattern
         
         const canFix = codeMatch || messageMatch;
         this.logger.info(`EpubTypeRoleFixer can fix issue: ${canFix ? 'yes' : 'no'} (codeMatch: ${codeMatch}, messageMatch: ${messageMatch})`);

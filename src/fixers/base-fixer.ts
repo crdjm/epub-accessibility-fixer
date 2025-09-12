@@ -83,24 +83,45 @@ export abstract class BaseFixer {
 
         // Try to find by filename only (in case path doesn't match exactly)
         const fileName = filePath.split('/').pop() || filePath;
+        this.logger.info(`Searching for content by filename: ${fileName} from path: ${filePath}`);
 
         for (const [path, contentItem] of context.contents) {
-            if (path.endsWith(fileName) || path.endsWith(filePath)) {
-                this.logger.info(`Found content by partial match: ${path} for requested ${filePath}`);
+            // Check for exact filename match
+            if (path.endsWith(fileName)) {
+                this.logger.info(`Found content by filename match: ${path} for requested ${filePath}`);
+                return contentItem;
+            }
+            // Check for partial path match
+            if (path.endsWith(filePath)) {
+                this.logger.info(`Found content by partial path match: ${path} for requested ${filePath}`);
                 return contentItem;
             }
         }
 
         // Try case-insensitive search
         const lowerFilePath = filePath.toLowerCase();
+        const lowerFileName = fileName.toLowerCase();
+        this.logger.info(`Trying case-insensitive search for: ${lowerFileName}`);
+
         for (const [path, contentItem] of context.contents) {
-            if (path.toLowerCase() === lowerFilePath || path.toLowerCase().endsWith(fileName.toLowerCase())) {
-                this.logger.info(`Found content by case-insensitive match: ${path} for requested ${filePath}`);
+            if (path.toLowerCase() === lowerFilePath) {
+                this.logger.info(`Found content by exact case-insensitive match: ${path} for requested ${filePath}`);
+                return contentItem;
+            }
+            if (path.toLowerCase().endsWith(lowerFileName)) {
+                this.logger.info(`Found content by case-insensitive filename match: ${path} for requested ${filePath}`);
+                return contentItem;
+            }
+            if (path.toLowerCase().endsWith(lowerFilePath)) {
+                this.logger.info(`Found content by case-insensitive path match: ${path} for requested ${filePath}`);
                 return contentItem;
             }
         }
 
-        this.logger.warn(`Content not found for path: ${filePath}`);
+        this.logger.warn(`Content not found for path: ${filePath}. Available paths:`);
+        for (const [path] of context.contents) {
+            this.logger.warn(`  - ${path}`);
+        }
         return undefined;
     }
 

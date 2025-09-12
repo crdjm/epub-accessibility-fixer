@@ -1,6 +1,8 @@
 import { ValidationIssue, FixResult, ProcessingContext } from '../types';
 import { Logger } from '../utils/common';
 import { BaseFixer } from '../fixers/base-fixer';
+import { ValidationStructureFixer } from '../fixers/validation-structure-fixer'; // Add this import
+import { MetadataAccessibilityFixer } from '../fixers/metadata-accessibility-fixer'; // Add this import
 import { AltTextFixer } from '../fixers/alt-text-fixer';
 import { HeadingStructureFixer } from '../fixers/heading-structure-fixer';
 import { LanguageAttributeFixer } from '../fixers/language-fixer';
@@ -8,14 +10,14 @@ import { MetadataFixer } from '../fixers/metadata-fixer';
 import { TitleFixer } from '../fixers/title-fixer';
 import { ColorContrastFixer } from '../fixers/color-contrast-fixer';
 import { LinkAccessibilityFixer } from '../fixers/link-accessibility-fixer';
+import { LinkAccessibilityEnhancedFixer } from '../fixers/link-accessibility-enhanced-fixer';
 import { InteractiveElementFixer } from '../fixers/interactive-element-fixer';
 import { ResourceReferenceFixer } from '../fixers/resource-reference-fixer';
-import { ValidationStructureFixer } from '../fixers/validation-structure-fixer';
 import { EpubTypeRoleFixer } from '../fixers/epub-type-role-fixer';
+import { ScrollableRegionFixer } from '../fixers/scrollable-region-fixer';
 import { NonLinearContentFixer } from '../fixers/non-linear-content-fixer';
 import { LandmarkUniqueFixer } from '../fixers/landmark-unique-fixer';
-import { MetadataAccessibilityFixer } from '../fixers/metadata-accessibility-fixer';
-import { LinkAccessibilityEnhancedFixer } from '../fixers/link-accessibility-enhanced-fixer'; // Add this import
+import { DataAttributeFixer } from '../fixers/data-attribute-fixer'; // Add this import
 
 export class FixerOrchestrator {
     private logger: Logger;
@@ -41,8 +43,10 @@ export class FixerOrchestrator {
             new InteractiveElementFixer(this.logger), // Fix interactive element accessibility
             new ResourceReferenceFixer(this.logger), // Fix remote/missing resource references
             new EpubTypeRoleFixer(this.logger),      // Fix epub:type to ARIA role mappings
+            new ScrollableRegionFixer(this.logger),  // Fix scrollable region focusable issues
             new NonLinearContentFixer(this.logger),  // Fix non-linear content reachability
             new LandmarkUniqueFixer(this.logger),    // Fix landmark uniqueness issues
+            new DataAttributeFixer(this.logger),     // Fix data attribute issues
             // Add more fixers here as they're implemented
         ];
 
@@ -153,9 +157,27 @@ export class FixerOrchestrator {
         const fixerForThisIssue = this.findFixerForIssue(fixedIssue);
         if (!fixerForThisIssue) return;
 
+        // Special handling for heading-order issues
+        if ((fixedIssue.code.includes('heading-order') || fixedIssue.message.includes('Heading order')) &&
+            fixerForThisIssue.getFixerName() === 'Heading Structure Fixer') {
+            // When the heading structure fixer successfully fixes issues in a file,
+            // mark all heading-order issues in that same file as fixed
+            this.logger.info('Processing heading-order issues individually by file');
+            
+            const sameFileHeadingOrderIssues = context.issues.filter(issue =>
+                !issue.fixed &&
+                (issue.code.includes('heading-order') || issue.message.includes('Heading order')) &&
+                issue.location?.file === fixedIssue.location?.file
+            );
+
+            sameFileHeadingOrderIssues.forEach(issue => {
+                issue.fixed = true;
+                this.logger.info(`Marked heading-order issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+            });
+        }
         // For language-related fixes, we should NOT mark all language issues as fixed since they're typically per-file
         // Each file needs to be processed individually
-        if (fixedIssue.code.includes('html-has-lang') ||
+        else if (fixedIssue.code.includes('html-has-lang') ||
             fixedIssue.code.includes('missing-lang') ||
             (fixedIssue.code.includes('RSC-005') && fixedIssue.message.toLowerCase().includes('language')) ||
             fixedIssue.code.includes('epub-lang') ||

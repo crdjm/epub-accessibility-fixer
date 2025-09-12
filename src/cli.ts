@@ -704,6 +704,15 @@ program
                 ]
             },
             {
+                code: 'scrollable-region-focusable',
+                description: 'Scrollable regions without keyboard accessibility',
+                fixableIssues: [
+                    'Adding tabindex attributes to make regions focusable',
+                    'Adding ARIA labels for screen readers',
+                    'Adding appropriate roles for semantic meaning'
+                ]
+            },
+            {
                 code: 'OPF-096',
                 description: 'Non-linear content not reachable',
                 fixableIssues: [

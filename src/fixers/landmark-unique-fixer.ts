@@ -1,4 +1,4 @@
-import { ValidationIssue, FixResult, ProcessingContext, EpubContent } from '../types';
+import { ValidationIssue, FixResult, ProcessingContext, EpubContent, FixDetail } from '../types';
 import { BaseFixer } from './base-fixer';
 import { Logger } from '../utils/common';
 
@@ -18,7 +18,9 @@ export class LandmarkUniqueFixer extends BaseFixer {
         return [
             'landmark-unique',
             'Landmarks should have a unique role or role/label/title',
-            'The landmark must have a unique aria-label, aria-labelledby, or title'
+            'The landmark must have a unique aria-label, aria-labelledby, or title',
+            'landmark-no-duplicate-banner', // Add specific code for duplicate banner issues
+            'duplicate banner' // Add pattern for duplicate banner messages
         ];
     }
 
@@ -31,6 +33,7 @@ export class LandmarkUniqueFixer extends BaseFixer {
         );
 
         if (codesMatch) {
+            this.logger.info(`LandmarkUniqueFixer can fix issue with code match: ${issue.code}`);
             return true;
         }
 
@@ -39,12 +42,35 @@ export class LandmarkUniqueFixer extends BaseFixer {
             'Landmarks should have a unique role or role/label/title',
             'The landmark must have a unique aria-label, aria-labelledby, or title',
             'landmark must have a unique',
-            'Ensure landmarks are unique'
+            'Ensure landmarks are unique',
+            'landmark-unique',  // DAISY ACE specific pattern
+            'Document has more than one banner landmark', // Specific pattern for duplicate banner
+            'duplicate banner', // General pattern for duplicate banner
+            'more than one banner' // Another pattern for duplicate banner
         ];
 
-        return messagePatterns.some(pattern =>
+        const matchesPattern = messagePatterns.some(pattern =>
             issue.message.toLowerCase().includes(pattern.toLowerCase())
         );
+        
+        
+        // Special handling for DAISY ACE landmark issues
+        const isDaisyAceLandmarkIssue = issue.code.includes('landmark-unique') || 
+                                       (issue.message.includes('landmark') && issue.message.includes('unique')) ||
+                                       issue.code === 'landmark-unique';
+
+        // Special handling for duplicate banner issues
+        const isDuplicateBannerIssue = issue.code.includes('landmark-no-duplicate-banner') ||
+                                      issue.message.includes('banner landmark') ||
+                                      issue.message.includes('duplicate banner');
+
+        if (matchesPattern || isDaisyAceLandmarkIssue || isDuplicateBannerIssue) {
+            this.logger.info(`LandmarkUniqueFixer can fix issue with pattern match: ${issue.message.substring(0, 100)}...`);
+            return true;
+        }
+
+        this.logger.info(`LandmarkUniqueFixer cannot fix issue: ${issue.code} - ${issue.message.substring(0, 100)}...`);
+        return false;
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
@@ -77,6 +103,20 @@ export class LandmarkUniqueFixer extends BaseFixer {
                     for (const [path] of context.contents) {
                         this.logger.info(`  - ${path}`);
                     }
+                    
+                    // Try to process all files as a fallback
+                    this.logger.info('Processing all content files as fallback');
+                    const contentFiles = this.getAllContentFiles(context);
+                    this.logger.info(`Found ${contentFiles.length} content files to check`);
+
+                    for (const content of contentFiles) {
+                        const fixed = await this.fixLandmarkUniquenessInFile(content, context, issue);
+                        if (fixed > 0) {
+                            changedFiles.push(content.path);
+                            totalFixed += fixed;
+                            this.logger.info(`Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
+                        }
+                    }
                 }
             } else {
                 // Fix all content files that might have landmark issues
@@ -102,6 +142,15 @@ export class LandmarkUniqueFixer extends BaseFixer {
                     { landmarksFixed: totalFixed }
                 );
             } else {
+                // Special handling for duplicate banner issues
+                if (issue.message.includes('banner') && issue.message.includes('duplicate')) {
+                    this.logger.info('Attempting to fix duplicate banner issue specifically');
+                    const result = await this.fixDuplicateBannerIssue(context);
+                    if (result.success) {
+                        return result;
+                    }
+                }
+                
                 return this.createFixResult(
                     false,
                     'No landmark uniqueness issues found to fix'
@@ -120,142 +169,116 @@ export class LandmarkUniqueFixer extends BaseFixer {
         const $ = this.loadDocument(content);
         let fixedCount = 0;
 
-        // Find all elements that could be landmarks
-        // This includes elements with epub:type, role, or nav elements
-        const potentialLandmarks = $('[epub\\:type], [role], nav');
+        // Find all elements that could be landmarks using more comprehensive selectors
+        const potentialLandmarks: any[] = [];
         
-        this.logger.info(`Found ${potentialLandmarks.length} potential landmark elements`);
-
-        // Group elements by their effective role to identify duplicates
-        const roleGroups: { [key: string]: any[] } = {};
-        
-        potentialLandmarks.each((_: number, element: CheerioElement) => {
+        // Find elements with epub:type attribute
+        $('[epub\\:type]').each((_: number, element: CheerioElement) => {
             const $element = $(element);
-            const role = $element.attr('role');
-            const epubType = $element.attr('epub:type');
-            
-            // Create a more precise key for grouping
-            // Use both epub:type and role when available to create a unique identifier
-            let effectiveRole = '';
-            if (epubType && role) {
-                // When both are present, use them together as the key
-                effectiveRole = `${epubType}|${role}`;
-            } else if (role) {
-                // If only role is present
-                effectiveRole = role;
-            } else if (epubType) {
-                // If only epub:type is present, try to map it to a role
-                const mappedRole = this.mapEpubTypeToRole(epubType);
-                if (mappedRole) {
-                    effectiveRole = mappedRole;
-                } else {
-                    // Fallback to epub:type with prefix
-                    effectiveRole = `epub:${epubType}`;
-                }
-            } else {
-                // Neither attribute present, skip
-                return;
-            }
-            
-            this.logger.info(`Found element with role="${role}" epub:type="${epubType}" effectiveRole="${effectiveRole}"`);
-            
-            if (!roleGroups[effectiveRole]) {
-                roleGroups[effectiveRole] = [];
-            }
-            roleGroups[effectiveRole].push({
-                element: $element,
-                epubType: epubType,
-                role: role
-            });
+            const epubType = $element.attr('epub:type') || '';
+            potentialLandmarks.push(element);
+            this.logger.info(`Found element with epub:type="${epubType}"`);
         });
-
-        // Process each role group to make duplicates unique
-        for (const [role, elements] of Object.entries(roleGroups)) {
-            this.logger.info(`Processing role group "${role}" with ${elements.length} elements`);
-            
-            // If there's only one element with this role, no need to make it unique
-            if (elements.length <= 1) {
-                this.logger.info(`Only ${elements.length} element with role "${role}", no uniqueness needed`);
-                continue;
-            }
-
-            // For each duplicate, add a unique accessible name
-            elements.forEach((elementInfo: any, index: number) => {
-                const $element = elementInfo.element;
-                const epubType = elementInfo.epubType;
-                const role = elementInfo.role;
-                
-                const existingAriaLabel = $element.attr('aria-label');
-                const existingTitle = $element.attr('title');
-                const existingAriaLabelledBy = $element.attr('aria-labelledby');
-                
-                // Skip if it already has a unique accessible name
-                if (existingAriaLabel || existingTitle || existingAriaLabelledBy) {
-                    this.logger.info(`Element already has accessible name, skipping: aria-label="${existingAriaLabel}", title="${existingTitle}", aria-labelledby="${existingAriaLabelledBy}"`);
-                    return;
-                }
-                
-                // Generate a unique accessible name based on epub:type and position
-                let uniqueName = '';
-                if (epubType) {
-                    // Capitalize first letter of epub:type
-                    const capitalizedType = epubType.charAt(0).toUpperCase() + epubType.slice(1);
-                    uniqueName = `${capitalizedType} ${index + 1}`;
-                } else if (role) {
-                    // Fallback to role-based name
-                    const capitalizedRole = role.replace('doc-', '').replace(/-/g, ' ');
-                    uniqueName = `${capitalizedRole} ${index + 1}`;
-                } else {
-                    uniqueName = `Landmark ${index + 1}`;
-                }
-                
-                // Add the unique accessible name
-                $element.attr('aria-label', uniqueName);
-                fixedCount++;
-                this.logger.info(`Added aria-label="${uniqueName}" to element with role="${role}" epub:type="${epubType}"`);
-            });
-        }
-
-        // Also specifically check for nav elements which are common landmarks
-        const navElements = $('nav');
-        this.logger.info(`Found ${navElements.length} nav elements`);
         
-        navElements.each((_: number, element: CheerioElement) => {
+        // Find elements with role attributes
+        $('[role]').each((_: number, element: CheerioElement) => {
             const $element = $(element);
-            const epubType = $element.attr('epub:type');
-            const role = $element.attr('role');
-            const existingAriaLabel = $element.attr('aria-label');
-            const existingTitle = $element.attr('title');
-            const existingAriaLabelledBy = $element.attr('aria-labelledby');
+            const role = $element.attr('role') || '';
+            potentialLandmarks.push(element);
+            this.logger.info(`Found element with role="${role}"`);
+        });
+        
+        // Also add nav elements specifically
+        $('nav').each((_: number, element: CheerioElement) => {
+            potentialLandmarks.push(element);
+            this.logger.info(`Found nav element`);
+        });
+        
+        // Remove duplicates by creating a Set of unique elements
+        const uniqueLandmarks = Array.from(new Set(potentialLandmarks.map(e => e)));
+        
+        this.logger.info(`Found ${uniqueLandmarks.length} potential landmark elements`);
+
+        // Even if we didn't find potential landmarks, let's do a more general search
+        // Look for any element that might be a landmark
+        this.logger.info('Doing general search for landmark elements');
+        
+        // Track landmark types to ensure uniqueness
+        const landmarkTypes: { [key: string]: number } = {};
+        
+        // More comprehensive selector to find landmark elements
+        const landmarkSelectors = [
+            '[epub\\:type]',
+            '[role]', 
+            'nav', 
+            'aside', 
+            'header', 
+            'footer', 
+            'main', 
+            'section'
+        ].join(', ');
+        
+        this.logger.info(`Using landmark selectors: ${landmarkSelectors}`);
+        
+        $(landmarkSelectors).each((_: number, element: CheerioElement) => {
+            const $element = $(element);
+            const epubType = $element.attr('epub:type') || '';
+            const role = $element.attr('role') || '';
+            const tagName = $element.prop('tagName')?.toLowerCase() || '';
+            const ariaLabel = $element.attr('aria-label') || '';
+            const title = $element.attr('title') || '';
+            const ariaLabelledBy = $element.attr('aria-labelledby') || '';
+            const className = $element.attr('class') || '';
             
-            // Skip if it already has a unique accessible name
-            if (existingAriaLabel || existingTitle || existingAriaLabelledBy) {
-                this.logger.info(`Nav element already has accessible name, skipping: aria-label="${existingAriaLabel}", title="${existingTitle}", aria-labelledby="${existingAriaLabelledBy}"`);
-                return;
-            }
+            // Check if this element is likely to be a landmark
+            const isLandmark = epubType || role || 
+                              ['nav', 'aside', 'header', 'footer', 'main', 'section'].includes(tagName);
             
-            // Generate a unique accessible name based on epub:type
-            let uniqueName = '';
-            if (epubType) {
-                // Capitalize first letter of epub:type
-                const capitalizedType = epubType.charAt(0).toUpperCase() + epubType.slice(1);
-                uniqueName = `${capitalizedType} Navigation`;
-            } else if (role) {
-                const capitalizedRole = role.replace('doc-', '').replace(/-/g, ' ');
-                uniqueName = `${capitalizedRole} Navigation`;
-            } else {
-                // Check if this is a landmarks nav
-                if ($element.find('ol > li > a[href]').length > 0) {
-                    uniqueName = 'Landmarks Navigation';
+            this.logger.info(`Checking element: epub:type="${epubType}", role="${role}", tagName="${tagName}", isLandmark=${isLandmark}`);
+            
+            if (isLandmark) {
+                // Check if this element lacks a unique name
+                if (!ariaLabel && !title && !ariaLabelledBy) {
+                    this.logger.info(`Found landmark element without unique name: epub:type="${epubType}", role="${role}", tagName="${tagName}"`);
+                    
+                    // Generate a unique name based on the element type
+                    let baseName = '';
+                    if (epubType) {
+                        baseName = epubType.replace(/-/g, ' ');
+                    } else if (role) {
+                        baseName = role.replace('doc-', '').replace(/-/g, ' ');
+                    } else if (tagName) {
+                        baseName = tagName;
+                    } else if (className) {
+                        // Use class name if available
+                        baseName = className.split(' ')[0].replace(/-/g, ' ');
+                    }
+                    
+                    if (baseName) {
+                        // Capitalize first letter of each word
+                        const capitalizedBaseName = baseName.replace(/\b\w/g, l => l.toUpperCase());
+                        
+                        // Track how many of this type we've seen
+                        if (!landmarkTypes[baseName]) {
+                            landmarkTypes[baseName] = 1;
+                        } else {
+                            landmarkTypes[baseName]++;
+                        }
+                        
+                        // Create unique name with counter if needed
+                        let uniqueName = capitalizedBaseName;
+                        if (landmarkTypes[baseName] > 1) {
+                            uniqueName = `${capitalizedBaseName} ${landmarkTypes[baseName]}`;
+                        }
+                        
+                        $element.attr('aria-label', uniqueName);
+                        fixedCount++;
+                        this.logger.info(`Added aria-label="${uniqueName}" to element with epub:type="${epubType}" role="${role}" tagName="${tagName}" class="${className}"`);
+                    }
                 } else {
-                    uniqueName = 'Navigation';
+                    this.logger.info(`Landmark element already has unique name: aria-label="${ariaLabel}", title="${title}", aria-labelledby="${ariaLabelledBy}"`);
                 }
             }
-            
-            // Add the unique accessible name
-            $element.attr('aria-label', uniqueName);
-            fixedCount++;
-            this.logger.info(`Added aria-label="${uniqueName}" to nav element with role="${role}" epub:type="${epubType}"`);
         });
 
         if (fixedCount > 0) {
@@ -264,6 +287,119 @@ export class LandmarkUniqueFixer extends BaseFixer {
         }
 
         return fixedCount;
+    }
+
+    /**
+     * Special fix for duplicate banner landmark issues
+     */
+    private async fixDuplicateBannerIssue(context: ProcessingContext): Promise<FixResult> {
+        this.logger.info('Fixing duplicate banner landmark issue');
+        
+        const changedFiles: string[] = [];
+        let totalFixed = 0;
+        const fixDetails: FixDetail[] = [];
+
+        // Find all content files
+        const contentFiles = this.getAllContentFiles(context);
+        
+        // Track banner landmarks across all files
+        const bannerLandmarks: Array<{content: EpubContent, $: CheerioStatic, element: any, $element: any}> = [];
+        
+        // First pass: collect all banner landmarks
+        for (const content of contentFiles) {
+            try {
+                const $ = this.loadDocument(content);
+                
+                // Find elements that are banner landmarks
+                // Look for elements with role="banner" or epub:type="banner"
+                const bannerElements = $('[role="banner"], [epub\\:type="banner"], header[role!="banner"][epub\\:type!="banner"]:first').toArray();
+                
+                for (const element of bannerElements) {
+                    const $element = $(element);
+                    bannerLandmarks.push({
+                        content,
+                        $,
+                        element,
+                        $element
+                    });
+                }
+            } catch (error) {
+                this.logger.warn(`Could not process file ${content.path} for banner landmarks: ${error}`);
+            }
+        }
+        
+        this.logger.info(`Found ${bannerLandmarks.length} banner landmarks across all files`);
+        
+        // If we have more than one banner landmark, we need to fix duplicates
+        if (bannerLandmarks.length > 1) {
+            // Keep the first banner landmark, make others non-banner landmarks
+            for (let i = 1; i < bannerLandmarks.length; i++) {
+                const {content, $, element, $element} = bannerLandmarks[i];
+                
+                // Change the role from "banner" to something else or remove it
+                const originalRole = $element.attr('role');
+                const originalEpubType = $element.attr('epub:type');
+                const originalHtml = $.html($element);
+                
+                // Remove banner role
+                if (originalRole === 'banner') {
+                    $element.removeAttr('role');
+                }
+                
+                // Remove banner epub:type
+                if (originalEpubType === 'banner') {
+                    $element.removeAttr('epub:type');
+                }
+                
+                // Add a more appropriate role if possible
+                const tagName = $element.prop('tagName')?.toLowerCase();
+                if (tagName === 'header') {
+                    // Headers can be given a banner role, but if we already have one,
+                    // we should use a different role or just add an aria-label
+                    $element.attr('role', 'contentinfo'); // Or another appropriate role
+                }
+                
+                // Ensure the element still has an accessible name
+                if (!$element.attr('aria-label') && !$element.attr('aria-labelledby') && !$element.attr('title')) {
+                    $element.attr('aria-label', 'Page Header'); // Generic label
+                }
+                
+                const fixedHtml = $.html($element);
+                fixDetails.push({
+                    filePath: content.path,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Changed duplicate banner landmark to contentinfo role to avoid duplication`,
+                    element: tagName || 'element',
+                    attribute: 'role',
+                    oldValue: 'banner',
+                    newValue: 'contentinfo'
+                });
+                
+                // Save the document
+                this.saveDocument($, content);
+                changedFiles.push(content.path);
+                totalFixed++;
+                
+                this.logger.info(`Fixed duplicate banner landmark in ${content.path}`);
+            }
+            
+            if (totalFixed > 0) {
+                return this.createFixResult(
+                    true,
+                    `Fixed ${totalFixed} duplicate banner landmarks by changing their roles`,
+                    changedFiles,
+                    { landmarksFixed: totalFixed, fixDetails }
+                );
+            }
+        } else {
+            this.logger.info('No duplicate banner landmarks found to fix');
+        }
+        
+        return this.createFixResult(
+            false,
+            'No duplicate banner landmarks found to fix'
+        );
     }
 
     private mapEpubTypeToRole(epubType: string): string | null {

@@ -331,6 +331,7 @@ export class AccessibilityAnalyzer {
             'epub-type-has-matching-role', // EPUB type to ARIA role mapping
             'non-linear-content',          // Non-linear content reachability
             'landmark-unique',             // Landmark must have unique accessible name
+            'scrollable-region-focusable', // Scrollable regions must be focusable
             'OPF-096'                      // Non-linear content reachability (EPUB validation code)
         ];
 
@@ -365,7 +366,9 @@ export class AccessibilityAnalyzer {
             'Publications must declare the',  // Metadata declaration messages
             'schema:accessibilityFeature',
             'schema:accessibilityHazard',
-            'schema:accessibilitySummary'
+            'schema:accessibilitySummary',
+            'Element should have focusable content',  // scrollable-region-focusable message
+            'Element should be focusable'  // scrollable-region-focusable message
         ];
 
         const isFixable = fixableMessagePatterns.some(pattern =>

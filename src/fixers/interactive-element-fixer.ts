@@ -24,10 +24,7 @@ export class InteractiveElementFixer extends BaseFixer {
             'form-field-multiple-labels',  // Multiple labels for form fields
             'missing-title',               // Missing title attributes
             'screen-reader-text',          // Text not visible to screen readers
-            'Element does not have text that is visible to screen readers', // Specific DAISY ACE message
-            'aria-label attribute does not exist or is empty', // Specific DAISY ACE message
-            'aria-labelledby attribute does not exist', // Specific DAISY ACE message
-            'Element has no title attribute', // Specific DAISY ACE message
+            // Remove the specific DAISY ACE messages that might conflict with other fixers
         ];
     }
 
@@ -56,11 +53,16 @@ export class InteractiveElementFixer extends BaseFixer {
                             (issue.message.includes('Element does not have text that is visible to screen readers') && 
                              ((issue as any).element === 'img' || 
                               (issue.location?.file && issue.location.file.includes('img'))));
+        
+        // Avoid handling landmark-specific issues that are handled by LandmarkUniqueFixer
+        const isLandmarkIssue = issue.code.includes('landmark') ||
+                               issue.message.includes('landmark') ||
+                               issue.message.includes('The landmark must have a unique');
 
         if (codesMatch) {
-            // If this is an image issue, don't handle it even if the code matches
-            if (isImageIssue) {
-                this.logger.info(`InteractiveElementFixer refusing to handle image issue with code match: ${issue.code}`);
+            // If this is an image issue, link issue, or landmark issue, don't handle it even if the code matches
+            if (isImageIssue || isLinkIssue || isLandmarkIssue) {
+                this.logger.info(`InteractiveElementFixer refusing to handle issue with code match: ${issue.code} (image: ${isImageIssue}, link: ${isLinkIssue}, landmark: ${isLandmarkIssue})`);
                 return false;
             }
             
@@ -76,11 +78,11 @@ export class InteractiveElementFixer extends BaseFixer {
             'Element has no title attribute'
         ];
 
-        this.logger.info(`InteractiveElementFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkIssue=${isLinkIssue}, isImageIssue=${isImageIssue}`);
+        this.logger.info(`InteractiveElementFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}...", isLinkIssue=${isLinkIssue}, isImageIssue=${isImageIssue}, isLandmarkIssue=${isLandmarkIssue}`);
 
-        // Only handle non-link, non-image issues with these message patterns
-        if (!isLinkIssue && !isImageIssue && messagePatterns.some(pattern => issue.message.includes(pattern))) {
-            this.logger.info(`InteractiveElementFixer can fix non-link, non-image issue with pattern match: ${issue.message.substring(0, 100)}...`);
+        // Only handle non-link, non-image, non-landmark issues with these message patterns
+        if (!isLinkIssue && !isImageIssue && !isLandmarkIssue && messagePatterns.some(pattern => issue.message.includes(pattern))) {
+            this.logger.info(`InteractiveElementFixer can fix non-link, non-image, non-landmark issue with pattern match: ${issue.message.substring(0, 100)}...`);
             return true;
         }
 

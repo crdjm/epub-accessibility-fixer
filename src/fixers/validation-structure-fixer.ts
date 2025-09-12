@@ -27,7 +27,9 @@ export class ValidationStructureFixer extends BaseFixer {
             'role attribute',
             'toc attribute must be set',
             'xsi:type',
-            'opf:role' // Add opf:role attribute handling
+            'opf:role', // Add opf:role attribute handling
+            'role must refine', // Add specific pattern for RSC-005 role refinement issues
+            'aria-deprecated-role' // Add handling for deprecated ARIA roles
         ];
     }
 
@@ -58,10 +60,9 @@ export class ValidationStructureFixer extends BaseFixer {
             // Additional patterns for RSC-005 errors - be more specific
             'rsc-005',
             'http-equiv',
-            // Remove the generic 'role' pattern that was causing false positives
-            // 'role',  // This was matching image-alt issues incorrectly
-            'xsi:type',
-            'epub:type',
+            // Remove the generic patterns that were causing false positives
+            // 'xsi:type',
+            // 'epub:type',  // This was matching epub-type-has-matching-role issues incorrectly
             'namespace',
             'doctype',
             'mimetype',
@@ -74,11 +75,27 @@ export class ValidationStructureFixer extends BaseFixer {
             'attribute "page-map" not allowed here',
             'external identifiers must not appear in the document type declaration',
             // Additional patterns for OPF-073
-            'opf-073'
+            'opf-073',
+            // Specific pattern for RSC-005 role refinement issues
+            'role must refine',
+            'property "role" must refine',
+            'creator", "contributor", or "publisher',
+            // Pattern for deprecated ARIA roles
+            'aria-deprecated-role',
+            'role used is deprecated',
+            'the role used is deprecated'
+            // Explicitly exclude scrollable-region-focusable issues as they're handled by ScrollableRegionFixer
+            // This pattern should NOT be included: 'scrollable-region-focusable'
         ];
 
         // Log all fixable messages for debugging
         this.logger.info(`Checking against fixable messages: ${fixableMessages.join(', ')}`);
+        
+        // Explicitly exclude scrollable-region-focusable issues as they're handled by ScrollableRegionFixer
+        if (issueMessageLower.includes('scrollable-region-focusable')) {
+            this.logger.info(`ValidationStructureFixer explicitly refusing to handle scrollable-region-focusable issue`);
+            return false;
+        }
         
         const canFix = fixableMessages.some(pattern => {
             const patternLower = pattern.toLowerCase();
@@ -149,6 +166,28 @@ export class ValidationStructureFixer extends BaseFixer {
             } else if (issue.message.includes('value of attribute "role" is invalid')) {
                 this.logger.info(`Handling role attribute issue`);
                 const result = await this.fixInvalidRole(issue, context);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
+                }
+            } else if (issue.message.includes('role must refine') || 
+                       issue.message.includes('property "role" must refine') ||
+                       issue.message.includes('creator", "contributor", or "publisher')) {
+                this.logger.info(`Handling role refinement issue`);
+                const result = await this.fixRoleRefinement(issue, context);
+                if (result.success) {
+                    fixApplied = true;
+                    fixDescription = result.message;
+                    if (result.changedFiles) changedFiles.push(...result.changedFiles);
+                    if (result.details?.fixDetails) fixDetails.push(...result.details.fixDetails);
+                }
+            } else if (issue.code === 'aria-deprecated-role' || 
+                       issue.message.includes('role used is deprecated') ||
+                       issue.message.includes('the role used is deprecated')) {
+                this.logger.info(`Handling deprecated ARIA role issue`);
+                const result = await this.fixDeprecatedAriaRole(issue, context);
                 if (result.success) {
                     fixApplied = true;
                     fixDescription = result.message;
@@ -682,6 +721,169 @@ export class ValidationStructureFixer extends BaseFixer {
     }
 
     /**
+     * Fix deprecated ARIA roles by replacing them with recommended alternatives
+     */
+    private async fixDeprecatedAriaRole(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        this.logger.info(`Fixing deprecated ARIA role issue: ${issue.message}`);
+        
+        const changedFiles: string[] = [];
+        const fixDetails: FixDetail[] = [];
+        let totalFixed = 0;
+        
+        // Extract the deprecated role from the message
+        const roleMatch = issue.message.match(/deprecated: ([\w-]+)/i);
+        let deprecatedRole = '';
+        if (roleMatch && roleMatch[1]) {
+            deprecatedRole = roleMatch[1];
+            this.logger.info(`Found deprecated role: ${deprecatedRole}`);
+        }
+        
+        // Process all content files
+        const contentFiles = this.getAllContentFiles(context);
+        this.logger.info(`Found ${contentFiles.length} content files to check for deprecated roles`);
+        
+        for (const content of contentFiles) {
+            const { fixed, details } = await this.fixDeprecatedRoleInFile(content, deprecatedRole);
+            if (fixed > 0) {
+                changedFiles.push(content.path);
+                totalFixed += fixed;
+                fixDetails.push(...details);
+                this.logger.info(`Fixed ${fixed} deprecated role issues in ${content.path}`);
+            }
+        }
+        
+        if (totalFixed > 0) {
+            return this.createFixResult(
+                true,
+                `Replaced ${totalFixed} deprecated ARIA roles with recommended alternatives`,
+                changedFiles,
+                { rolesFixed: totalFixed, fixDetails }
+            );
+        }
+        
+        return this.createFixResult(
+            false,
+            'No deprecated ARIA roles found to fix'
+        );
+    }
+    
+    /**
+     * Fix deprecated roles in a single file
+     */
+    private async fixDeprecatedRoleInFile(content: EpubContent, deprecatedRole: string): Promise<{ fixed: number; details: FixDetail[] }> {
+        this.logger.info(`Fixing deprecated roles in file: ${content.path}`);
+        
+        const $ = this.loadDocument(content);
+        let fixedCount = 0;
+        const fixDetails: FixDetail[] = [];
+        
+        // Find elements with the deprecated role
+        if (deprecatedRole) {
+            $(`[role="${deprecatedRole}"]`).each((_, element) => {
+                const $element = $(element);
+                const tagName = $element.prop('tagName')?.toLowerCase() || 'element';
+                
+                // Get replacement role
+                const replacementRole = this.getReplacementForDeprecatedRole(deprecatedRole);
+                if (replacementRole) {
+                    const originalHtml = $.html($element);
+                    $element.attr('role', replacementRole);
+                    fixedCount++;
+                    const fixedHtml = $.html($element);
+                    
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Replaced deprecated role="${deprecatedRole}" with role="${replacementRole}"`,
+                        element: tagName,
+                        attribute: 'role',
+                        oldValue: deprecatedRole,
+                        newValue: replacementRole
+                    });
+                    
+                    this.logger.info(`Replaced deprecated role="${deprecatedRole}" with role="${replacementRole}" in ${content.path}`);
+                } else {
+                    // If no replacement, remove the deprecated role
+                    const originalHtml = $.html($element);
+                    $element.removeAttr('role');
+                    fixedCount++;
+                    const fixedHtml = $.html($element);
+                    
+                    fixDetails.push({
+                        filePath: content.path,
+                        originalContent: originalHtml,
+                        fixedContent: fixedHtml,
+                        explanation: `Removed deprecated role="${deprecatedRole}" (no replacement available)`,
+                        element: tagName,
+                        attribute: 'role',
+                        oldValue: deprecatedRole,
+                        newValue: undefined
+                    });
+                    
+                    this.logger.info(`Removed deprecated role="${deprecatedRole}" in ${content.path}`);
+                }
+            });
+        } else {
+            // If we don't have a specific role, look for any potentially deprecated roles
+            $('[role]').each((_, element) => {
+                const $element = $(element);
+                const role = $element.attr('role');
+                const tagName = $element.prop('tagName')?.toLowerCase() || 'element';
+                
+                if (role && this.isDeprecatedAriaRole(role)) {
+                    // Get replacement role
+                    const replacementRole = this.getReplacementForDeprecatedRole(role);
+                    if (replacementRole) {
+                        const originalHtml = $.html($element);
+                        $element.attr('role', replacementRole);
+                        fixedCount++;
+                        const fixedHtml = $.html($element);
+                        
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Replaced deprecated role="${role}" with role="${replacementRole}"`,
+                            element: tagName,
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: replacementRole
+                        });
+                        
+                        this.logger.info(`Replaced deprecated role="${role}" with role="${replacementRole}" in ${content.path}`);
+                    } else {
+                        // If no replacement, remove the deprecated role
+                        const originalHtml = $.html($element);
+                        $element.removeAttr('role');
+                        fixedCount++;
+                        const fixedHtml = $.html($element);
+                        
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Removed deprecated role="${role}" (no replacement available)`,
+                            element: tagName,
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: undefined
+                        });
+                        
+                        this.logger.info(`Removed deprecated role="${role}" in ${content.path}`);
+                    }
+                }
+            });
+        }
+        
+        if (fixedCount > 0) {
+            this.saveDocument($, content);
+        }
+        
+        return { fixed: fixedCount, details: fixDetails };
+    }
+
+    /**
      * Fix http-equiv attributes in a single file
      */
     private async fixHttpEquivInFile(content: EpubContent): Promise<{ fixed: boolean; details: FixDetail[] }> {
@@ -945,6 +1147,45 @@ export class ValidationStructureFixer extends BaseFixer {
                         this.logger.info(`Fixed invalid role="${role}" to role="navigation" in nav element in ${content.path}`);
                     }
                 } 
+                // Check if role is deprecated
+                else if (this.isDeprecatedAriaRole(role)) {
+                    // Replace deprecated role with recommended alternative
+                    const replacementRole = this.getReplacementForDeprecatedRole(role);
+                    if (replacementRole) {
+                        const originalHtml = $.html($element);
+                        $element.attr('role', replacementRole);
+                        fixed = true;
+                        const fixedHtml = $.html($element);
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Replaced deprecated role="${role}" with role="${replacementRole}"`,
+                            element: tagName,
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: replacementRole
+                        });
+                        this.logger.info(`Replaced deprecated role="${role}" with role="${replacementRole}" in ${content.path}`);
+                    } else {
+                        // If no replacement, remove the deprecated role
+                        const originalHtml = $.html($element);
+                        $element.removeAttr('role');
+                        fixed = true;
+                        const fixedHtml = $.html($element);
+                        fixDetails.push({
+                            filePath: content.path,
+                            originalContent: originalHtml,
+                            fixedContent: fixedHtml,
+                            explanation: `Removed deprecated role="${role}" (no replacement available)`,
+                            element: tagName,
+                            attribute: 'role',
+                            oldValue: role,
+                            newValue: undefined
+                        });
+                        this.logger.info(`Removed deprecated role="${role}" in ${content.path}`);
+                    }
+                }
                 // For other elements, check if role is valid ARIA role
                 else if (!this.isValidAriaRole(role)) {
                     // Only remove if it's clearly invalid, not just uncommon
@@ -986,12 +1227,90 @@ export class ValidationStructureFixer extends BaseFixer {
     }
 
     /**
+     * Fix role refinement issues in metadata
+     */
+    private async fixRoleRefinement(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        // Find OPF file
+        let opfContent: EpubContent | null = null;
+        let opfPath: string = '';
+
+        for (const [path, content] of context.contents) {
+            if (path.endsWith('.opf') || content.mediaType === 'application/oebps-package+xml') {
+                opfContent = content;
+                opfPath = path;
+                break;
+            }
+        }
+
+        if (!opfContent) {
+            return this.createFixResult(false, 'Could not find OPF file to fix role refinement');
+        }
+
+        const $ = this.loadDocument(opfContent);
+        let fixed = false;
+        const fixDetails: FixDetail[] = [];
+
+        // Find metadata elements with role attributes that need refinement
+        $('dc\\:creator[role], dc\\:contributor[role], dc\\:publisher[role]').each((_, element) => {
+            const $element = $(element);
+            const role = $element.attr('role');
+            const tagName = element.tagName || 'unknown';
+            
+            if (role) {
+                // Convert EPUB 2.0 role attribute to EPUB 3 meta element
+                const originalHtml = $.html($element);
+                
+                // Remove the role attribute
+                $element.removeAttr('role');
+                
+                // Add meta element with the role information
+                const metaElement = $('<meta>')
+                    .attr('refines', '#' + ($element.attr('id') || ''))
+                    .attr('property', 'role')
+                    .attr('scheme', 'marc:relators')
+                    .text(role);
+                
+                $element.after(metaElement);
+                
+                fixed = true;
+                
+                const fixedHtml = $.html($element) + $.html(metaElement);
+                fixDetails.push({
+                    filePath: opfPath,
+                    originalContent: originalHtml,
+                    fixedContent: fixedHtml,
+                    explanation: `Converted EPUB 2.0 role attribute to EPUB 3 meta element for ${tagName}`,
+                    element: tagName,
+                    attribute: 'role',
+                    oldValue: role,
+                    newValue: `meta element with role="${role}"`
+                });
+                
+                this.logger.info(`Converted EPUB 2.0 role="${role}" to EPUB 3 meta element for ${tagName} in ${opfPath}`);
+            }
+        });
+
+        if (fixed) {
+            this.saveDocument($, opfContent);
+            return this.createFixResult(
+                true,
+                'Fixed role refinement issues by converting EPUB 2.0 role attributes to EPUB 3 meta elements',
+                [opfPath],
+                { fixDetails }
+            );
+        }
+
+        return this.createFixResult(false, 'No role refinement issues found to fix');
+    }
+
+    /**
      * Fix xsi:type attributes in OPF file
      */
     private async fixXsiTypeAttribute(context: ProcessingContext): Promise<FixResult> {
         // Find OPF file
         let opfContent: EpubContent | null = null;
         let opfPath: string = '';
+
 
         for (const [path, content] of context.contents) {
             if (path.endsWith('.opf') || content.mediaType === 'application/oebps-package+xml') {
@@ -1636,6 +1955,27 @@ export class ValidationStructureFixer extends BaseFixer {
             'doc-qna', 'doc-subtitle', 'doc-tip', 'doc-toc'
         ];
         return validRoles.includes(role.toLowerCase());
+    }
+    
+    /**
+     * Check if role is deprecated
+     */
+    private isDeprecatedAriaRole(role: string): boolean {
+        // List of deprecated ARIA roles
+        const deprecatedRoles = [
+            'doc-endnote' // This is actually still valid, but some validators might flag it
+        ];
+        return deprecatedRoles.includes(role.toLowerCase());
+    }
+    
+    /**
+     * Get replacement for deprecated ARIA role
+     */
+    private getReplacementForDeprecatedRole(role: string): string | null {
+        const replacements: { [key: string]: string } = {
+            'doc-endnote': 'doc-biblioentry' // Common replacement for doc-endnote
+        };
+        return replacements[role.toLowerCase()] || null;
     }
 }
 

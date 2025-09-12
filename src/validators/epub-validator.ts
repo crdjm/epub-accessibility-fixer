@@ -286,6 +286,7 @@ export class ValidationRunner {
             'HTM-009', // Missing title
             'HTM-011', // Missing lang attribute
             'HTM-014', // Invalid heading structure
+            'HTM_061', // Invalid data attributes (added for custom data attribute fixes)
             'CSS-001', // Invalid CSS
             'CSS-003', // Unused CSS
             'NCX-001', // Missing NCX
