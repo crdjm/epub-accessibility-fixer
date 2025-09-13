@@ -53,6 +53,8 @@ export class LandmarkUniqueFixer extends BaseFixer {
             issue.message.toLowerCase().includes(pattern.toLowerCase())
         );
         
+        this.logger.info(`LandmarkUniqueFixer checking issue: code="${issue.code}", message="${issue.message.substring(0, 100)}..."`);
+        this.logger.info(`LandmarkUniqueFixer pattern match result: ${matchesPattern}`);
         
         // Special handling for DAISY ACE landmark issues
         const isDaisyAceLandmarkIssue = issue.code.includes('landmark-unique') || 
@@ -74,8 +76,9 @@ export class LandmarkUniqueFixer extends BaseFixer {
     }
 
     async fix(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
-        this.logger.info(`Fixing landmark unique issue: ${issue.message}`);
-        this.logger.info(`Issue location: ${issue.location?.file || 'global'}`);
+        this.logger.info(`LandmarkUniqueFixer: Fixing landmark unique issue: ${issue.message}`);
+        this.logger.info(`LandmarkUniqueFixer: Issue location: ${issue.location?.file || 'global'}`);
+        this.logger.info(`LandmarkUniqueFixer: Issue code: ${issue.code}`);
 
         try {
             const changedFiles: string[] = [];
@@ -83,58 +86,59 @@ export class LandmarkUniqueFixer extends BaseFixer {
 
             // If issue specifies a file, fix only that file
             if (issue.location?.file) {
-                this.logger.info(`Processing specific file: ${issue.location.file}`);
+                this.logger.info(`LandmarkUniqueFixer: Processing specific file: ${issue.location.file}`);
                 const content = this.findContentByPath(context, issue.location.file);
 
                 if (content) {
-                    this.logger.info(`Found content for file: ${content.path}`);
+                    this.logger.info(`LandmarkUniqueFixer: Found content for file: ${content.path}`);
                     const fixed = await this.fixLandmarkUniquenessInFile(content, context, issue);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
-                        this.logger.info(`Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
+                        this.logger.info(`LandmarkUniqueFixer: Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
                     } else {
-                        this.logger.info(`No landmark uniqueness issues fixed in ${content.path}`);
+                        this.logger.info(`LandmarkUniqueFixer: No landmark uniqueness issues fixed in ${content.path}`);
                     }
                 } else {
-                    this.logger.warn(`Could not find content for file: ${issue.location.file}`);
+                    this.logger.warn(`LandmarkUniqueFixer: Could not find content for file: ${issue.location.file}`);
                     // List available files for debugging
-                    this.logger.info('Available files:');
+                    this.logger.info('LandmarkUniqueFixer: Available files:');
                     for (const [path] of context.contents) {
-                        this.logger.info(`  - ${path}`);
+                        this.logger.info(`LandmarkUniqueFixer:   - ${path}`);
                     }
                     
                     // Try to process all files as a fallback
-                    this.logger.info('Processing all content files as fallback');
+                    this.logger.info('LandmarkUniqueFixer: Processing all content files as fallback');
                     const contentFiles = this.getAllContentFiles(context);
-                    this.logger.info(`Found ${contentFiles.length} content files to check`);
+                    this.logger.info(`LandmarkUniqueFixer: Found ${contentFiles.length} content files to check`);
 
                     for (const content of contentFiles) {
                         const fixed = await this.fixLandmarkUniquenessInFile(content, context, issue);
                         if (fixed > 0) {
                             changedFiles.push(content.path);
                             totalFixed += fixed;
-                            this.logger.info(`Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
+                            this.logger.info(`LandmarkUniqueFixer: Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
                         }
                     }
                 }
             } else {
                 // Fix all content files that might have landmark issues
-                this.logger.info('Processing all content files for landmark issues');
+                this.logger.info('LandmarkUniqueFixer: Processing all content files for landmark issues');
                 const contentFiles = this.getAllContentFiles(context);
-                this.logger.info(`Found ${contentFiles.length} content files to check`);
+                this.logger.info(`LandmarkUniqueFixer: Found ${contentFiles.length} content files to check`);
 
                 for (const content of contentFiles) {
                     const fixed = await this.fixLandmarkUniquenessInFile(content, context, issue);
                     if (fixed > 0) {
                         changedFiles.push(content.path);
                         totalFixed += fixed;
-                        this.logger.info(`Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
+                        this.logger.info(`LandmarkUniqueFixer: Fixed ${fixed} landmark uniqueness issues in ${content.path}`);
                     }
                 }
             }
 
             if (totalFixed > 0) {
+                this.logger.info(`LandmarkUniqueFixer: Successfully fixed ${totalFixed} landmark issues`);
                 return this.createFixResult(
                     true,
                     `Made ${totalFixed} landmarks unique by adding accessible names`,
@@ -144,13 +148,25 @@ export class LandmarkUniqueFixer extends BaseFixer {
             } else {
                 // Special handling for duplicate banner issues
                 if (issue.message.includes('banner') && issue.message.includes('duplicate')) {
-                    this.logger.info('Attempting to fix duplicate banner issue specifically');
+                    this.logger.info('LandmarkUniqueFixer: Attempting to fix duplicate banner issue specifically');
                     const result = await this.fixDuplicateBannerIssue(context);
                     if (result.success) {
+                        this.logger.info('LandmarkUniqueFixer: Successfully fixed duplicate banner issue');
                         return result;
+                    } else {
+                        this.logger.info('LandmarkUniqueFixer: Failed to fix duplicate banner issue');
                     }
                 }
                 
+                // Even if we couldn't fix specific elements, try a more general approach
+                this.logger.info('LandmarkUniqueFixer: Attempting general landmark fix');
+                const generalResult = await this.fixAllLandmarks(context);
+                if (generalResult.success) {
+                    this.logger.info('LandmarkUniqueFixer: Successfully fixed landmarks with general approach');
+                    return generalResult;
+                }
+                
+                this.logger.info('LandmarkUniqueFixer: No landmark uniqueness issues found to fix');
                 return this.createFixResult(
                     false,
                     'No landmark uniqueness issues found to fix'
@@ -158,7 +174,7 @@ export class LandmarkUniqueFixer extends BaseFixer {
             }
 
         } catch (error) {
-            this.logger.error(`Landmark unique fix failed: ${error}`);
+            this.logger.error(`LandmarkUniqueFixer: Landmark unique fix failed: ${error}`);
             return this.createFixResult(false, `Failed to fix landmark uniqueness: ${error}`);
         }
     }
@@ -299,23 +315,40 @@ export class LandmarkUniqueFixer extends BaseFixer {
         let totalFixed = 0;
         const fixDetails: FixDetail[] = [];
 
-        // Find all content files
+        // Find all content files - use a more comprehensive approach
         const contentFiles = this.getAllContentFiles(context);
+        this.logger.info(`Found ${contentFiles.length} content files to check for banner landmarks`);
+        
+        // If no content files found, try to get all text-based files from context
+        if (contentFiles.length === 0) {
+            this.logger.info('No XHTML/HTML files found, checking all text content files');
+            for (const [path, content] of context.contents) {
+                if (typeof content.content === 'string' && (path.endsWith('.xhtml') || path.endsWith('.html') || path.includes('.xhtml') || path.includes('.html'))) {
+                    contentFiles.push(content);
+                    this.logger.info(`Added file to check: ${path}`);
+                }
+            }
+        }
         
         // Track banner landmarks across all files
         const bannerLandmarks: Array<{content: EpubContent, $: CheerioStatic, element: any, $element: any}> = [];
         
-        // First pass: collect all banner landmarks
+        // First pass: collect all banner landmarks with more flexible selectors
         for (const content of contentFiles) {
             try {
                 const $ = this.loadDocument(content);
                 
-                // Find elements that are banner landmarks
-                // Look for elements with role="banner" or epub:type="banner"
-                const bannerElements = $('[role="banner"], [epub\\:type="banner"], header[role!="banner"][epub\\:type!="banner"]:first').toArray();
+                // Find elements that are banner landmarks with more flexible selectors
+                // Look for elements with role containing "banner" or epub:type containing "banner"
+                const bannerElements = $('[role*="banner"], [epub\\:type*="banner"], [role="banner"], [epub\\:type="banner"]').toArray();
+                
+                this.logger.info(`Found ${bannerElements.length} potential banner elements in ${content.path}`);
                 
                 for (const element of bannerElements) {
                     const $element = $(element);
+                    const role = $element.attr('role') || '';
+                    const epubType = $element.attr('epub:type') || '';
+                    this.logger.info(`Found banner element: role="${role}", epub:type="${epubType}"`);
                     bannerLandmarks.push({
                         content,
                         $,
@@ -332,6 +365,7 @@ export class LandmarkUniqueFixer extends BaseFixer {
         
         // If we have more than one banner landmark, we need to fix duplicates
         if (bannerLandmarks.length > 1) {
+            this.logger.info(`Processing ${bannerLandmarks.length} banner landmarks, keeping first one`);
             // Keep the first banner landmark, make others non-banner landmarks
             for (let i = 1; i < bannerLandmarks.length; i++) {
                 const {content, $, element, $element} = bannerLandmarks[i];
@@ -341,27 +375,53 @@ export class LandmarkUniqueFixer extends BaseFixer {
                 const originalEpubType = $element.attr('epub:type');
                 const originalHtml = $.html($element);
                 
+                this.logger.info(`Processing banner landmark ${i}: role="${originalRole}", epub:type="${originalEpubType}"`);
+                
                 // Remove banner role
-                if (originalRole === 'banner') {
-                    $element.removeAttr('role');
+                if (originalRole) {
+                    if (originalRole.includes('banner')) {
+                        // If role is exactly "banner" or contains "banner", remove or replace it
+                        if (originalRole === 'banner') {
+                            $element.removeAttr('role');
+                            this.logger.info('Removed role="banner" attribute');
+                        } else {
+                            // For roles like "doc-banner", replace with a more appropriate role
+                            const newRole = originalRole.replace(/banner/g, 'contentinfo');
+                            $element.attr('role', newRole);
+                            this.logger.info(`Replaced role="${originalRole}" with role="${newRole}"`);
+                        }
+                    }
                 }
                 
                 // Remove banner epub:type
-                if (originalEpubType === 'banner') {
-                    $element.removeAttr('epub:type');
+                if (originalEpubType) {
+                    if (originalEpubType.includes('banner')) {
+                        if (originalEpubType === 'banner') {
+                            $element.removeAttr('epub:type');
+                            this.logger.info('Removed epub:type="banner" attribute');
+                        } else {
+                            // For epub:types like "doc-banner", replace with a more appropriate type
+                            const newEpubType = originalEpubType.replace(/banner/g, 'contentinfo');
+                            $element.attr('epub:type', newEpubType);
+                            this.logger.info(`Replaced epub:type="${originalEpubType}" with epub:type="${newEpubType}"`);
+                        }
+                    }
                 }
                 
-                // Add a more appropriate role if possible
+                // Add a more appropriate role if needed and if element doesn't already have one
                 const tagName = $element.prop('tagName')?.toLowerCase();
-                if (tagName === 'header') {
+                const currentRole = $element.attr('role');
+                if (tagName === 'header' && !currentRole) {
                     // Headers can be given a banner role, but if we already have one,
                     // we should use a different role or just add an aria-label
                     $element.attr('role', 'contentinfo'); // Or another appropriate role
+                    this.logger.info('Added role="contentinfo" to header element');
                 }
                 
                 // Ensure the element still has an accessible name
                 if (!$element.attr('aria-label') && !$element.attr('aria-labelledby') && !$element.attr('title')) {
                     $element.attr('aria-label', 'Page Header'); // Generic label
+                    this.logger.info('Added aria-label="Page Header" to ensure accessible name');
                 }
                 
                 const fixedHtml = $.html($element);
@@ -372,8 +432,8 @@ export class LandmarkUniqueFixer extends BaseFixer {
                     explanation: `Changed duplicate banner landmark to contentinfo role to avoid duplication`,
                     element: tagName || 'element',
                     attribute: 'role',
-                    oldValue: 'banner',
-                    newValue: 'contentinfo'
+                    oldValue: originalRole || originalEpubType,
+                    newValue: $element.attr('role') || $element.attr('epub:type') || 'aria-label'
                 });
                 
                 // Save the document
@@ -394,11 +454,148 @@ export class LandmarkUniqueFixer extends BaseFixer {
             }
         } else {
             this.logger.info('No duplicate banner landmarks found to fix');
+            
+            // Even if we don't have duplicates, we should still try to fix any banner landmarks
+            // that don't have accessible names
+            let fixedAny = false;
+            for (const {content, $, element, $element} of bannerLandmarks) {
+                const ariaLabel = $element.attr('aria-label');
+                const title = $element.attr('title');
+                const ariaLabelledBy = $element.attr('aria-labelledby');
+                
+                // If banner landmark lacks accessible name, add one
+                if (!ariaLabel && !title && !ariaLabelledBy) {
+                    $element.attr('aria-label', 'Page Header');
+                    this.saveDocument($, content);
+                    changedFiles.push(content.path);
+                    fixedAny = true;
+                    this.logger.info(`Added accessible name to banner landmark in ${content.path}`);
+                }
+            }
+            
+            if (fixedAny) {
+                return this.createFixResult(
+                    true,
+                    `Added accessible names to banner landmarks`,
+                    changedFiles,
+                    { landmarksFixed: changedFiles.length, fixDetails }
+                );
+            }
         }
         
         return this.createFixResult(
             false,
             'No duplicate banner landmarks found to fix'
+        );
+    }
+
+    /**
+     * General fix for all landmark issues
+     */
+    private async fixAllLandmarks(context: ProcessingContext): Promise<FixResult> {
+        this.logger.info('Fixing all landmark issues');
+        
+        const changedFiles: string[] = [];
+        let totalFixed = 0;
+        const fixDetails: FixDetail[] = [];
+
+        // Get all content files with a more comprehensive approach
+        let contentFiles = this.getAllContentFiles(context);
+        
+        // If no content files found, try to get all text-based files from context
+        if (contentFiles.length === 0) {
+            this.logger.info('No XHTML/HTML files found, checking all text content files');
+            for (const [path, content] of context.contents) {
+                if (typeof content.content === 'string' && (path.endsWith('.xhtml') || path.endsWith('.html') || path.includes('.xhtml') || path.includes('.html'))) {
+                    contentFiles.push(content);
+                    this.logger.info(`Added file to check: ${path}`);
+                }
+            }
+        }
+        
+        this.logger.info(`Found ${contentFiles.length} content files to check for all landmarks`);
+
+        // Process all content files
+        for (const content of contentFiles) {
+            try {
+                const $ = this.loadDocument(content);
+                let fileFixedCount = 0;
+                
+                // Find all potential landmark elements
+                const landmarkSelectors = [
+                    '[epub\\:type]',
+                    '[role]', 
+                    'nav', 
+                    'aside', 
+                    'header', 
+                    'footer', 
+                    'main', 
+                    'section'
+                ].join(', ');
+                
+                $(landmarkSelectors).each((_: number, element: CheerioElement) => {
+                    const $element = $(element);
+                    const epubType = $element.attr('epub:type') || '';
+                    const role = $element.attr('role') || '';
+                    const tagName = $element.prop('tagName')?.toLowerCase() || '';
+                    const ariaLabel = $element.attr('aria-label') || '';
+                    const title = $element.attr('title') || '';
+                    const ariaLabelledBy = $element.attr('aria-labelledby') || '';
+                    
+                    // Check if this element is likely to be a landmark
+                    const isLandmark = epubType || role || 
+                                      ['nav', 'aside', 'header', 'footer', 'main', 'section'].includes(tagName);
+                    
+                    if (isLandmark) {
+                        // Check if this element lacks a unique name
+                        if (!ariaLabel && !title && !ariaLabelledBy) {
+                            this.logger.info(`Found landmark element without unique name: epub:type="${epubType}", role="${role}", tagName="${tagName}"`);
+                            
+                            // Generate a unique name based on the element type
+                            let baseName = '';
+                            if (epubType) {
+                                baseName = epubType.replace(/-/g, ' ');
+                            } else if (role) {
+                                baseName = role.replace('doc-', '').replace(/-/g, ' ');
+                            } else if (tagName) {
+                                baseName = tagName;
+                            }
+                            
+                            if (baseName) {
+                                // Capitalize first letter of each word
+                                const uniqueName = baseName.replace(/\b\w/g, l => l.toUpperCase());
+                                
+                                $element.attr('aria-label', uniqueName);
+                                fileFixedCount++;
+                                totalFixed++;
+                                this.logger.info(`Added aria-label="${uniqueName}" to element with epub:type="${epubType}" role="${role}" tagName="${tagName}"`);
+                            }
+                        }
+                    }
+                });
+
+                if (fileFixedCount > 0) {
+                    this.logger.info(`Saving document with ${fileFixedCount} fixed landmark issues`);
+                    this.saveDocument($, content);
+                    changedFiles.push(content.path);
+                }
+            } catch (error) {
+                this.logger.warn(`Could not process file ${content.path} for landmark issues: ${error}`);
+            }
+        }
+        
+        if (totalFixed > 0) {
+            return this.createFixResult(
+                true,
+                `Made ${totalFixed} landmarks unique by adding accessible names`,
+                changedFiles,
+                { landmarksFixed: totalFixed, fixDetails }
+            );
+        }
+        
+        return this.createFixResult(
+            false,
+            'No landmark issues found to fix'
         );
     }
 

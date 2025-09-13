@@ -127,16 +127,35 @@ export abstract class BaseFixer {
 
     protected getAllContentFiles(context: ProcessingContext): EpubContent[] {
         const contentFiles: EpubContent[] = [];
+        this.logger.info(`Getting all content files from context with ${context.manifest.items.length} manifest items`);
 
+        // First try to get files from manifest
         for (const item of context.manifest.items) {
+            this.logger.info(`Checking manifest item: href="${item.href}", mediaType="${item.mediaType}"`);
             if (item.mediaType === 'application/xhtml+xml' || item.mediaType === 'text/html') {
                 const content = context.contents.get(item.href);
                 if (content && typeof content.content === 'string') {
                     contentFiles.push(content);
+                    this.logger.info(`Added XHTML/HTML file from manifest: ${item.href}`);
+                } else {
+                    this.logger.info(`No content found for manifest item: ${item.href}`);
                 }
             }
         }
 
+        // If no files found in manifest, try to get all text-based files from context
+        if (contentFiles.length === 0) {
+            this.logger.info('No XHTML/HTML files found in manifest, checking all text content files');
+            for (const [path, content] of context.contents) {
+                this.logger.info(`Checking content file: ${path}, type: ${typeof content.content}`);
+                if (typeof content.content === 'string' && (path.endsWith('.xhtml') || path.endsWith('.html') || path.includes('.xhtml') || path.includes('.html'))) {
+                    contentFiles.push(content);
+                    this.logger.info(`Added file to check: ${path}`);
+                }
+            }
+        }
+
+        this.logger.info(`Returning ${contentFiles.length} content files`);
         return contentFiles;
     }
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test EPUB</dc:title>
+    <dc:identifier id="BookId">test-epub-001</dc:identifier>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="toc" href="toc.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="heading" href="heading-order.xhtml" media-type="application/xhtml+xml"/>
+    <item id="role" href="deprecated-role.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="toc"/>
+    <itemref idref="heading"/>
+    <itemref idref="role"/>
+  </spine>
+</package>

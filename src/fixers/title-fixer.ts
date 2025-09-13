@@ -21,6 +21,22 @@ export class TitleFixer extends BaseFixer {
     }
 
     canFix(issue: ValidationIssue): boolean {
+        // Only handle RSC-017 issues that are about missing title elements, not deprecated roles
+        if (issue.code === 'RSC-017') {
+            // Check if this is about a missing title element
+            const isMissingTitle = issue.message.includes('title') && 
+                                 (issue.message.includes('missing') || 
+                                  issue.message.includes('required') || 
+                                  issue.message.includes('not found'));
+            // Check if this is about a deprecated role (should not be handled by TitleFixer)
+            const isDeprecatedRole = issue.message.includes('role is deprecated') || 
+                                   issue.message.includes('doc-endnote role is deprecated');
+            
+            // Only handle if it's a missing title issue and NOT a deprecated role issue
+            return isMissingTitle && !isDeprecatedRole;
+        }
+        
+        // For other codes, use the standard matching
         return this.getHandledCodes().some(code => issue.code.includes(code) || code.includes(issue.code));
     }
 

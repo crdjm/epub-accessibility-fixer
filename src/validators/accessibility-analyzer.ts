@@ -332,7 +332,9 @@ export class AccessibilityAnalyzer {
             'non-linear-content',          // Non-linear content reachability
             'landmark-unique',             // Landmark must have unique accessible name
             'scrollable-region-focusable', // Scrollable regions must be focusable
-            'OPF-096'                      // Non-linear content reachability (EPUB validation code)
+            'OPF-096',                     // Non-linear content reachability (EPUB validation code)
+            'aria-deprecated-role',        // Deprecated ARIA roles
+            'landmark-no-duplicate-banner' // Duplicate banner landmarks
         ];
 
         const ruleId = assertion['earl:test']?.['dct:title'] || assertion['earl:test']?.title || '';
@@ -368,7 +370,10 @@ export class AccessibilityAnalyzer {
             'schema:accessibilityHazard',
             'schema:accessibilitySummary',
             'Element should have focusable content',  // scrollable-region-focusable message
-            'Element should be focusable'  // scrollable-region-focusable message
+            'Element should be focusable',  // scrollable-region-focusable message
+            'role is deprecated and should not be used',  // aria-deprecated-role message
+            'doc-endnote role is deprecated',  // specific deprecated role message
+            'Document has more than one banner landmark'  // landmark-no-duplicate-banner message
         ];
 
         const isFixable = fixableMessagePatterns.some(pattern =>
