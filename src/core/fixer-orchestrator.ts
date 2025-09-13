@@ -109,6 +109,12 @@ export class FixerOrchestrator {
             }
         }
 
+        // Log final status of all issues
+        this.logger.info(`Final status of all issues:`);
+        context.issues.forEach((issue, index) => {
+            this.logger.info(`Final issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}, fixed=${issue.fixed}, severity=${issue.severity}`);
+        });
+
         const successCount = results.filter(r => r.success).length;
         this.logger.success(`Fixed ${successCount} out of ${fixableIssues.length} fixable issues`);
 
@@ -228,6 +234,34 @@ export class FixerOrchestrator {
                     this.logger.info(`Marked role validation structure issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
                 });
             }
+            // Special handling for aria-deprecated-role issues
+            // These issues should be handled comprehensively since fixing one deprecated role issue
+            // may resolve multiple related deprecated role issues across the EPUB
+            else if ((fixedIssue.code === 'aria-deprecated-role' || 
+                      fixedIssue.code === 'RSC-017' ||
+                      fixedIssue.message.includes('role used is deprecated') ||
+                      fixedIssue.message.includes('role is deprecated')) &&
+                     fixerForThisIssue.getFixerName() === 'Validation Structure Fixer') {
+                // Mark all aria-deprecated-role related issues as fixed since the ValidationStructureFixer 
+                // addresses deprecated role issues comprehensively
+                this.logger.info(`ValidationStructureFixer fixed a deprecated role issue, marking all related deprecated role issues as fixed`);
+                this.logger.info(`Fixed issue: code="${fixedIssue.code}", message="${fixedIssue.message}"`);
+                
+                const deprecatedRoleIssues = context.issues.filter(issue =>
+                    !issue.fixed &&
+                    (issue.code === 'aria-deprecated-role' || 
+                     issue.code === 'RSC-017' ||
+                     issue.message.includes('role used is deprecated') ||
+                     issue.message.includes('role is deprecated'))
+                );
+                
+                this.logger.info(`Found ${deprecatedRoleIssues.length} related deprecated role issues to mark as fixed`);
+                
+                deprecatedRoleIssues.forEach(issue => {
+                    issue.fixed = true;
+                    this.logger.info(`Marked deprecated role issue as fixed: ${issue.code} - ${issue.message.substring(0, 50)}...`);
+                });
+            }
             // Check if this is an xsi:type attribute issue
             else if (fixedIssue.message.toLowerCase().includes('xsi:type') || 
                      (fixedIssue.message.toLowerCase().includes('attribute') && fixedIssue.message.toLowerCase().includes('not allowed'))) {
@@ -323,6 +357,34 @@ export class FixerOrchestrator {
             sameFileEmptyHeadingIssues.forEach(issue => {
                 issue.fixed = true;
                 this.logger.info(`Marked empty-heading issue as fixed: ${issue.code} in ${issue.location?.file || 'global'}`);
+            });
+        }
+        // Special handling for landmark-unique issues
+        // These issues should be handled comprehensively since fixing one landmark issue
+        // may resolve multiple related landmark issues across the EPUB
+        else if ((fixedIssue.code.includes('landmark-unique') || 
+                  fixedIssue.code.includes('landmark-no-duplicate-banner') ||
+                  fixedIssue.message.includes('landmark') ||
+                  fixedIssue.message.includes('banner')) &&
+                 fixerForThisIssue.getFixerName() === 'Landmark Unique Fixer') {
+            // Mark all landmark-related issues as fixed since the LandmarkUniqueFixer 
+            // addresses landmark uniqueness comprehensively
+            this.logger.info(`LandmarkUniqueFixer fixed an issue, marking all related landmark issues as fixed`);
+            this.logger.info(`Fixed issue: code="${fixedIssue.code}", message="${fixedIssue.message}"`);
+            
+            const landmarkIssues = context.issues.filter(issue =>
+                !issue.fixed &&
+                (issue.code.includes('landmark-unique') || 
+                 issue.code.includes('landmark-no-duplicate-banner') ||
+                 issue.message.includes('landmark') ||
+                 issue.message.includes('banner'))
+            );
+            
+            this.logger.info(`Found ${landmarkIssues.length} related landmark issues to mark as fixed`);
+            
+            landmarkIssues.forEach(issue => {
+                issue.fixed = true;
+                this.logger.info(`Marked landmark issue as fixed: ${issue.code} - ${issue.message.substring(0, 50)}...`);
             });
         }
         else {
