@@ -18,6 +18,21 @@ After converting an EPUB 2.0 file to EPUB 3.0, you may still encounter several t
 - **Link Accessibility**: Links with insufficient descriptive text
 - **Landmark Issues**: Non-unique landmark elements
 
+## Enhanced Fixing Capabilities
+
+The tool now includes several enhancements to better handle persistent issues:
+
+### Retry Mechanism
+Issues are now attempted multiple times (default: 3 attempts) before being marked as persistent. This helps with issues that may be resolved by changes made during previous fixing attempts.
+
+### Persistent Issue Categorization
+Issues that remain after all fixing attempts are categorized by type (validation, accessibility, metadata, structural, other) for easier analysis.
+
+### Detailed Reporting
+Persistent issues now include detailed information about why they couldn't be fixed automatically and guidance for manual intervention.
+
+See [PERSISTENT-ISSUES-HANDLING-ENHANCEMENTS.md](file:///Users/crdjm/Dev/qoder/PERSISTENT-ISSUES-HANDLING-ENHANCEMENTS.md) for technical details about these enhancements.
+
 ## Recommended Workflow
 
 ### Step 1: Convert EPUB 2.0 to EPUB 3.0

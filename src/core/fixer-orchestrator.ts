@@ -22,9 +22,11 @@ import { DataAttributeFixer } from '../fixers/data-attribute-fixer'; // Add this
 export class FixerOrchestrator {
     private logger: Logger;
     private fixers: BaseFixer[] = [];
+    private maxRetries: number = 3; // Maximum number of retries for persistent issues
 
-    constructor(logger: Logger) {
+    constructor(logger: Logger, maxRetries: number = 3) {
         this.logger = logger;
+        this.maxRetries = maxRetries;
         this.initializeFixers();
     }
 
@@ -82,11 +84,15 @@ export class FixerOrchestrator {
             // Skip if already marked as fixed by duplicate detection
             if (issue.fixed) {
                 this.logger.info(`Skipping already fixed issue: ${issue.code} - ${issue.message}`);
+                // Add details to indicate this issue was already fixed
+                if (!issue.details) {
+                    issue.details = "This issue was already fixed as part of a related fix.";
+                }
                 continue;
             }
 
             try {
-                const result = await this.fixIssue(issue, context);
+                const result = await this.fixIssueWithRetry(issue, context);
                 results.push(result);
 
                 if (result.success) {
@@ -98,9 +104,17 @@ export class FixerOrchestrator {
                 } else {
                     this.logger.warn(`Failed to fix issue: ${issue.code} - ${result.message}`);
                     // Don't mark as fixed if the fix failed
+                    // Add details to indicate the fix failed
+                    if (!issue.details) {
+                        issue.details = `Sorry, I couldn't fix this issue: ${result.message}`;
+                    }
                 }
             } catch (error) {
                 this.logger.error(`Failed to fix issue ${issue.code}: ${error}`);
+                // Add details to indicate the fix failed with an error
+                if (!issue.details) {
+                    issue.details = `Sorry, I couldn't fix this issue due to an error: ${error}`;
+                }
                 results.push({
                     success: false,
                     message: `Failed to fix ${issue.code}: ${error}`,
@@ -109,16 +123,69 @@ export class FixerOrchestrator {
             }
         }
 
+        // Handle persistent issues that remain after initial fixing attempts
+        await this.handlePersistentIssues(context, results);
+
         // Log final status of all issues
         this.logger.info(`Final status of all issues:`);
         context.issues.forEach((issue, index) => {
-            this.logger.info(`Final issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}, fixed=${issue.fixed}, severity=${issue.severity}`);
+            this.logger.info(`Final issue ${index + 1}: code="${issue.code}", message="${issue.message}", fixable=${issue.fixable}, fixed=${issue.fixed}, severity=${issue.severity}${issue.details ? `, details="${issue.details}"` : ''}`);
         });
 
         const successCount = results.filter(r => r.success).length;
         this.logger.success(`Fixed ${successCount} out of ${fixableIssues.length} fixable issues`);
 
         return results;
+    }
+
+    async fixIssueWithRetry(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
+        let attempts = 0;
+        let result: FixResult;
+
+        while (attempts < this.maxRetries) {
+            attempts++;
+            this.logger.info(`Attempt ${attempts}/${this.maxRetries} to fix issue: code="${issue.code}", message="${issue.message}"`);
+            
+            try {
+                result = await this.fixIssue(issue, context);
+                
+                if (result.success) {
+                    this.logger.success(`Successfully fixed issue on attempt ${attempts}: ${issue.code} - ${issue.message}`);
+                    return result;
+                } else {
+                    this.logger.warn(`Attempt ${attempts} failed to fix issue: ${issue.code} - ${result.message}`);
+                    // If this is the last attempt, return the failed result
+                    if (attempts >= this.maxRetries) {
+                        return result;
+                    }
+                    // Wait a bit before retrying
+                    await this.delay(100 * attempts); // Exponential backoff
+                }
+            } catch (error) {
+                this.logger.error(`Attempt ${attempts} threw error while fixing issue ${issue.code}: ${error}`);
+                // If this is the last attempt, return a failed result
+                if (attempts >= this.maxRetries) {
+                    return {
+                        success: false,
+                        message: `Fixer error after ${attempts} attempts: ${error}`,
+                        details: { fixer: this.findFixerForIssue(issue)?.getFixerName() || 'unknown', error: String(error) }
+                    };
+                }
+                // Wait a bit before retrying
+                await this.delay(100 * attempts); // Exponential backoff
+            }
+        }
+
+        // This should not be reached, but just in case
+        return {
+            success: false,
+            message: `Failed to fix issue after ${this.maxRetries} attempts`,
+            details: { issueCode: issue.code }
+        };
+    }
+
+    private async delay(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     async fixIssue(issue: ValidationIssue, context: ProcessingContext): Promise<FixResult> {
@@ -128,6 +195,8 @@ export class FixerOrchestrator {
 
         if (!fixer) {
             this.logger.info(`No fixer found for issue: ${issue.code}`);
+            // Add details to the issue indicating no fixer was found
+            issue.details = "Sorry, I couldn't find a fixer for this issue.";
             return {
                 success: false,
                 message: `No fixer available for issue: ${issue.code}`,
@@ -144,17 +213,104 @@ export class FixerOrchestrator {
                 this.logger.success(`Successfully fixed: ${issue.message}`);
             } else {
                 this.logger.warn(`Fix failed: ${result.message}`);
+                // Add details to the issue indicating the fix failed
+                issue.details = `Sorry, I couldn't fix this issue: ${result.message}`;
             }
 
             return result;
         } catch (error) {
             this.logger.error(`Fixer ${fixer.getFixerName()} threw error: ${error}`);
+            // Add details to the issue indicating the fix failed with an error
+            issue.details = `Sorry, I couldn't fix this issue due to an error: ${error}`;
             return {
                 success: false,
                 message: `Fixer error: ${error}`,
                 details: { fixer: fixer.getFixerName(), error: String(error) }
             };
         }
+    }
+
+    private async handlePersistentIssues(context: ProcessingContext, results: FixResult[]): Promise<void> {
+        this.logger.info('Handling persistent issues that remain after initial fixing attempts');
+        
+        // Identify issues that are still not fixed
+        const persistentIssues = context.issues.filter(issue => 
+            issue.fixable && !issue.fixed
+        );
+
+        if (persistentIssues.length === 0) {
+            this.logger.info('No persistent issues found');
+            return;
+        }
+
+        this.logger.info(`Found ${persistentIssues.length} persistent issues to handle`);
+
+        // Categorize persistent issues
+        const categorizedIssues = this.categorizePersistentIssues(persistentIssues);
+        
+        // Log categorized issues
+        Object.keys(categorizedIssues).forEach(category => {
+            this.logger.info(`Category ${category}: ${categorizedIssues[category].length} issues`);
+            categorizedIssues[category].forEach((issue, index) => {
+                this.logger.info(`  ${index + 1}. ${issue.code} - ${issue.message}`);
+            });
+        });
+
+        // Add detailed information to persistent issues
+        persistentIssues.forEach(issue => {
+            if (!issue.details) {
+                issue.details = "This issue persists after multiple fixing attempts. It may require manual intervention or a different approach.";
+            }
+        });
+
+        // Add a summary result for persistent issues
+        results.push({
+            success: false,
+            message: `Found ${persistentIssues.length} persistent issues that require manual attention`,
+            details: {
+                persistentIssuesCount: persistentIssues.length,
+                categorizedIssues: Object.keys(categorizedIssues).reduce((acc, category) => {
+                    acc[category] = categorizedIssues[category].length;
+                    return acc;
+                }, {} as Record<string, number>),
+                recommendation: "Refer to HANDLING-PERSISTENT-ISSUES.md for guidance on manual intervention"
+            }
+        });
+    }
+
+    private categorizePersistentIssues(issues: ValidationIssue[]): Record<string, ValidationIssue[]> {
+        const categories: Record<string, ValidationIssue[]> = {
+            'validation': [],
+            'accessibility': [],
+            'metadata': [],
+            'structural': [],
+            'other': []
+        };
+
+        issues.forEach(issue => {
+            if (issue.code.includes('RSC') || issue.code.includes('OPF') || issue.code.includes('NCX')) {
+                categories['validation'].push(issue);
+            } else if (issue.category === 'accessibility' || 
+                      issue.code.includes('accessibility') || 
+                      issue.code.includes('landmark') ||
+                      issue.code.includes('link') ||
+                      issue.code.includes('alt')) {
+                categories['accessibility'].push(issue);
+            } else if (issue.code.includes('metadata') || 
+                      issue.message.includes('metadata') ||
+                      issue.message.includes('DC') ||
+                      issue.message.includes('dc:')) {
+                categories['metadata'].push(issue);
+            } else if (issue.message.includes('structure') || 
+                      issue.message.includes('hierarchy') ||
+                      issue.code.includes('heading')) {
+                categories['structural'].push(issue);
+            } else {
+                categories['other'].push(issue);
+            }
+        });
+
+        return categories;
     }
 
     private markSimilarIssuesFixed(fixedIssue: ValidationIssue, context: ProcessingContext): void {
